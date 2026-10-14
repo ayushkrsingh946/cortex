@@ -3,6 +3,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -69,7 +70,7 @@ func runWithDependencies(ctx context.Context, args []string, stdout, stderr io.W
 	case "--version":
 		return runVersion(stdout, stderr)
 	case "doctor":
-		return runDoctor(ctx, stdout, stderr, runner, install.policy)
+		return runDoctor(ctx, stdout, stderr, runner, install.policy, skillroot.ResolveSystemUninstallRoots)
 	case "qa":
 		return runQA(ctx, args[1:], stdout, stderr)
 	case "update":
@@ -89,7 +90,7 @@ func runWithDependencies(ctx context.Context, args []string, stdout, stderr io.W
 	}
 }
 
-func runDoctor(ctx context.Context, stdout, stderr io.Writer, runner runtimeprobe.Runner, policy runtimecompat.Policy) int {
+func runDoctor(ctx context.Context, stdout, stderr io.Writer, runner runtimeprobe.Runner, policy runtimecompat.Policy, resolveRoots func() ([]skillroot.UninstallRoot, error)) int {
 	matrix, err := probeCompatibilityMatrix(ctx, runner, policy)
 	if err != nil {
 		writeError(stderr, "probe_failed")
@@ -98,6 +99,16 @@ func runDoctor(ctx context.Context, stdout, stderr io.Writer, runner runtimeprob
 	if _, err := io.WriteString(stdout, doctorReport(ctx, matrix)); err != nil {
 		writeError(stderr, "output_failed")
 		return exitFailure
+	}
+	// The prior install-state probe keeps doctor exit 0 honest: a prior state
+	// this build cannot classify blocks install, so the same blocking condition
+	// install will hit is named here with its remedy (issue #281).
+	notes, blocked := doctorPriorStateBlocker(resolveRoots)
+	if notes != "" {
+		if _, err := io.WriteString(stdout, notes+"\n"); err != nil {
+			writeError(stderr, "output_failed")
+			return exitFailure
+		}
 	}
 	// The exit code answers whether an install can proceed, not whether every
 	// runtime is certified. An admitted uncertified version is disclosed in the
@@ -109,12 +120,46 @@ func runDoctor(ctx context.Context, stdout, stderr io.Writer, runner runtimeprob
 			return exitUnknown
 		}
 	}
+	if blocked {
+		return exitConflict
+	}
 	return exitOK
+}
+
+// doctorPriorStateBlocker reads each resolved runtime root's install-state.json
+// and reports the schemas this build cannot classify. It parses only the
+// schemaVersion field: classification stays in install; doctor only needs the
+// schema number to name the same blocking condition install will hit.
+func doctorPriorStateBlocker(resolveRoots func() ([]skillroot.UninstallRoot, error)) (string, bool) {
+	roots, err := resolveRoots()
+	if err != nil {
+		return "", false
+	}
+	notes := make([]string, 0, len(roots))
+	for _, root := range roots {
+		data, err := os.ReadFile(filepath.Join(root.RootPath(), ".cortex", "install-state.json"))
+		if err != nil {
+			continue
+		}
+		var version struct {
+			SchemaVersion *int `json:"schemaVersion"`
+		}
+		if json.Unmarshal(data, &version) != nil || version.SchemaVersion == nil {
+			continue
+		}
+		if installobserve.PriorSchemaSupported(*version.SchemaVersion) {
+			continue
+		}
+		notes = append(notes, fmt.Sprintf(
+			"note=install_state_schema_unsupported runtime=%s prior_schema=%d supported="+installobserve.SupportedPriorSchemas+" remedy=adopt the prior state through a guided update or archive it and reinstall",
+			root.RuntimeID(), *version.SchemaVersion))
+	}
+	return strings.Join(notes, "\n"), len(notes) > 0
 }
 
 const (
 	qaUsage = "usage: cortex qa run --role <role> --request <file> --catalog <dir> [--backend pi|claude|opencode] [--evidence <file.json>]\n"
-	qaHelp = qaUsage + "\nQA evaluates evidence and does not run tests.\n" +
+	qaHelp  = qaUsage + "\nQA evaluates evidence and does not run tests.\n" +
 		"Write a short, bounded plain-text request (request.txt):\n" +
 		"printf 'R1: Responses must finish within 100 ms.\\nR2: Responses must wait at least 500 ms.\\nIdentify the contradiction; do not edit files.\\n' > request.txt\n" +
 		"Use a catalog root directory containing catalog.json (for example, ./catalog):\n" +
