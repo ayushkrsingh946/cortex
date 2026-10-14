@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "id": "odd-roadmap",
+  "description": "Bootstrap and maintain an ODD roadmap coordination index: result milestones, ODD-carrying work units, readiness gates, and append-only revisions.",
+  "family": "documentation",
+  "source": "families/documentation/sources/odd-roadmap.md",
+  "activation": "automatic",
+  "provenance": "cortex-owned",
+  "license": "CC-BY-SA-4.0",
+  "redistributionAllowed": true
+}

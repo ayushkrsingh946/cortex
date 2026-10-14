@@ -15,7 +15,7 @@ import (
 	"github.com/refactor-ia/cortex/internal/skillrender"
 )
 
-const builtInFingerprint = "ea796163c9eb8d1bf0457b5552978be9958a401835e93aaf08a7e714515e7bbc"
+const builtInFingerprint = "ea1673540c1ebd43be0441c1d872e1cab4c59f2697cdfead1fe4e4d244f2853c"
 
 func TestSnapshotLoadsEmbeddedCatalog(t *testing.T) {
 	snapshot, err := Snapshot()
@@ -29,12 +29,16 @@ func TestSnapshotLoadsEmbeddedCatalog(t *testing.T) {
 	if len(qualityAssurance.Capabilities()) != 7 {
 		t.Fatalf("quality-assurance capabilities = %d, want 7", len(qualityAssurance.Capabilities()))
 	}
-	if total := totalCapabilities(snapshot); total != 8 {
-		t.Fatalf("embedded capabilities = %d, want 8", total)
+	if total := totalCapabilities(snapshot); total != 9 {
+		t.Fatalf("embedded capabilities = %d, want 9", total)
 	}
 	reasoning := familyByID(t, snapshot, "reasoning")
 	if len(reasoning.Capabilities()) != 1 {
 		t.Fatalf("reasoning capabilities = %d, want 1", len(reasoning.Capabilities()))
+	}
+	documentation := familyByID(t, snapshot, "documentation")
+	if len(documentation.Capabilities()) != 1 {
+		t.Fatalf("documentation capabilities = %d, want 1", len(documentation.Capabilities()))
 	}
 }
 
@@ -104,13 +108,15 @@ func TestSnapshotProjectsEmbeddedCapabilitiesToRuntimeDestinations(t *testing.T)
 }
 
 // expectedDestinations is one skill per embedded capability: the seven
-// quality-assurance skills plus the reasoning-family maintainer-delivery
-// skill, the only capabilities the catalog carries.
+// quality-assurance skills, the reasoning-family maintainer-delivery skill,
+// and the documentation-family odd-roadmap skill, the only capabilities the
+// catalog carries.
 var expectedDestinations = []string{
 	"skills/cortex-adversarial-tester/SKILL.md",
 	"skills/cortex-evidence-auditor/SKILL.md",
 	"skills/cortex-exploratory-tester/SKILL.md",
 	"skills/cortex-maintainer-delivery/SKILL.md",
+	"skills/cortex-odd-roadmap/SKILL.md",
 	"skills/cortex-qa-no-ci/SKILL.md",
 	"skills/cortex-requirements-analyst/SKILL.md",
 	"skills/cortex-test-designer/SKILL.md",

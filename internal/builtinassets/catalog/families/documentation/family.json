@@ -1,1 +1,9 @@
-{"schemaVersion":1,"id":"documentation","router":"families/documentation/router.md","capabilities":[],"agents":[]}
+{
+  "schemaVersion": 1,
+  "id": "documentation",
+  "router": "families/documentation/router.md",
+  "capabilities": [
+    "families/documentation/capabilities/odd-roadmap.json"
+  ],
+  "agents": []
+}
