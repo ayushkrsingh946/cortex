@@ -17,6 +17,10 @@ The foundation phase built those guarantees and proved them. The next phase is
 collaboration as a first-class delivery path. New horizontal infrastructure requires a
 demonstrated need (see issue #175).
 
+Sequencing and readiness are coordinated through the living ODD roadmap index
+(issue #288, described in the [operating guide](docs/operating.md)); this document
+holds the narrative, the index holds the approved order.
+
 ## Current state (honest)
 
 | Area | State |
