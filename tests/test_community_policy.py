@@ -76,6 +76,7 @@ EXPECTED_FILES = {
         "docs/README.md",
         "ROADMAP.md",
         "docs/design/fork-first-upstream-last.md",
+        "docs/design/issue-332-powershell-windows.md",
         "docs/design/project-constitution.md",
         "docs/operating.md",
         "docs/verification.md",
