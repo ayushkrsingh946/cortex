@@ -27,48 +27,68 @@ Evidence from the current tree:
 - Releases are evaluation prereleases for darwin_arm64 and linux_amd64
   (`internal/releasecatalog`); there is no windows_amd64 target.
 
-## Phase A — PowerShell runtime target (scoped plan)
+## Phase A — Directory projection target (scoped plan, revised v2)
 
-Outcome: a PowerShell-based agent runtime can receive curated skills and QA actors
-through the same transactional guarantees as the existing three runtimes.
+Outcome: PowerShell-based agent surfaces receive curated skills and QA actors by
+projecting them into a user-selected directory, with the same transactional
+guarantees as the existing runtimes. Revision v2 (2026-10-19, maintainer decision):
+the target is a directory projection mode, not a new runtime family.
+
+### Evaluation behind the revision
+
+- Surface research (2026-10-19) found no dominant PowerShell-native agent runtime
+  with its own skills directory: AIShell is archived since January 2026; existing
+  CLIs on Windows reuse the same destinations as their POSIX RuntimeIDs; niche
+  PowerShell harnesses have no skills contract.
+- The open consumption contract is the Agent Skills specification
+  (agentskills.io), implemented by Microsoft Agent Framework: a directory of
+  `SKILL.md` files with `name`, `description`, `license`, and arbitrary `metadata`
+  frontmatter — compatible with Cortex's projection, and ignoring unknown fields
+  (`metadata.cortex-*` passes through).
+- Copying files by hand works for landing content (the TARS precedent) but loses
+  catalog provenance, manifest hashes, ownership, and transactionality — the gap
+  #303 and #294 document.
 
 ### Scope
 
-1. **Runtime definition and admission.** New `RuntimeID` for the PowerShell runtime
-   in `internal/runtimematrix`, wired through `installplan.validPair`,
-   `internal/artifact/bundle.go` expected runtimes, `internal/ownership`,
-   projection, and `internal/runtimecompat` (compatible / uncertified /
-   known_incompatible admission, following the #303 pattern).
-2. **Projection and destinations.** Define where skills land for a PowerShell runtime
-   (root kind in `internal/skilldest`), including multi-profile handling analogous to
-   the #303 proposal, and what the install plan emits per target.
-3. **QA route/backend binding.** Add the QA route/backend binding for the runtime in
-   `internal/qapi` following the existing contract. QA lifecycle rules do not change;
-   the binding decides how (or whether) QA actors project for this runtime.
-4. **Diagnostics.** `cortex doctor` reports presence, compatibility, and install
-   action for the runtime like the others.
-5. **Verification evidence.** Structural conformance, isolated install and readback,
-   and at least one real smoke invocation for the new runtime family, recorded per
-   the architecture's verification rules.
+1. **Directory destination mode.** `cortex install --target-dir <path>` projects
+   skills and QA actors as plain `SKILL.md` files into the chosen directory, inside
+   the existing transaction (manifest, ownership, backup, rollback, readback). No
+   new `RuntimeID` family and no `runtimematrix` entry: this is a destination mode,
+   OS-agnostic, usable today on POSIX.
+2. **Update and uninstall.** The directory target participates in `update` and
+   conservative `uninstall` through the recorded ownership, without touching files
+   Cortex does not own.
+3. **Diagnostics.** `cortex doctor` reports the configured directory target
+   (presence, writability) without version certification — there is no host binary
+   to probe.
+4. **QA actors.** QA actors render as skills (the four lenses are self-contained;
+   already proven by the TARS vendoring). No QA backend binding is added: this
+   target does not run `qa run` backends.
+5. **Consumption contract.** The Agent Skills specification is documented as the
+   consumption contract for the output (any host reading `SKILL.md` from
+   directories can consume it), without coupling Cortex to a specific SDK.
 
-### Open decisions for the scoped plan (resolved before readiness)
+### Resolved decisions
 
-- Exact destination layout and profile selection mechanism for the target runtime
-  (needs the same first-hand evidence #303 collected for Hermes).
-- QA actor handling: render as skill, native equivalent, or skip — decided with the
-  destination evidence, and documented.
-- Whether an emit-to-directory mode for vendoring is in scope or deferred.
+- Target: directory projection mode (this revision), replacing the full runtime
+  target. Milestone "PowerShell runtime target" retains its outcome name; the scope
+  is this mode.
+- QA actor handling: render as skills; no QA backend binding.
+- Emit-to-directory: it is the whole of Phase A, not an optional extra; it is also
+  the natural prerequisite for Phase B on Windows.
 
 ### Readiness gate
 
-Phase A is ready for implementation when: destination evidence exists (layout,
-profiles, probe command), the four open decisions above are resolved and recorded,
-and the maintainer approves this scope.
+Phase A is ready for implementation when the maintainer approves this revised
+scope. Destination evidence and the former open decisions are resolved above.
 
 ## Phase B — Windows platform (scoped plan)
 
 Outcome: the CLI installs, updates, and uninstalls with verified semantics on
-windows_amd64, with release binaries available.
+windows_amd64, with release binaries available. The Phase A directory target is a
+prerequisite: a Windows user installs skills into a directory, so that mode exists
+and is proven on POSIX first.
 
 ### Scope
 
@@ -92,9 +112,9 @@ Windows is written and approved, and the maintainer approves this scope.
 
 ## Sequencing
 
-Phase A does not require Phase B (S3): a PowerShell target can land while the CLI
-remains POSIX-only. Phase B benefits from Phase A's probe validation but has no hard
-dependency on it. Each phase carries its own milestone and work units.
+Phase A does not require Phase B (S3): the directory target lands while the CLI
+remains POSIX-only, and Phase B consumes it as its install-mode prerequisite. Each
+phase carries its own milestone and work units.
 
 ## Proposed roadmap revision (for issue #288, maintainer approval required)
 
@@ -106,7 +126,7 @@ after approval, and each work unit's plan written in its own issue.
 >
 > | Milestone | Work / active ODD | Status and readiness |
 > | --- | --- | --- |
-> | [PowerShell runtime target] | Scoped plan: docs/design/issue-332-powershell-windows.md Phase A (#332) | Blocked on readiness gate: destination evidence, open decisions resolved, maintainer scope approval. No issues created yet. |
+> | [PowerShell runtime target](https://github.com/refactor-ia/cortex/milestone/4) | Scoped plan: docs/design/issue-332-powershell-windows.md Phase A, revised v2 — directory projection mode (#332) | Readiness gate resolved (revision v2, 2026-10-19): directory-mode scope approved by the maintainer; work-unit issues follow. |
 > | [Windows platform] | Scoped plan: docs/design/issue-332-powershell-windows.md Phase B (#332) | Blocked on readiness gate: Windows verification environment, Windows mode/backup semantics design, maintainer scope approval. No issues created yet. |
 >
 > Proposal marker: `<!-- odd-roadmap: proposal=cortex-powershell-windows-v1 operation=roadmap-revision -->`
@@ -114,5 +134,6 @@ after approval, and each work unit's plan written in its own issue.
 ## Non-goals
 
 - No dates and no promised versions anywhere (roadmap rule).
-- No QA lifecycle changes beyond the Phase A backend binding.
+- No QA lifecycle changes; the directory target adds no QA backend.
 - No new capability content in either phase.
+- No Windows-specific behavior in Phase A: the directory target is OS-agnostic.
