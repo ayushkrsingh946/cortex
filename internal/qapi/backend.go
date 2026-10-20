@@ -67,7 +67,22 @@ type Backend interface {
 type AvailabilityVerdict struct {
 	Available bool
 	Code      qaadmission.Code
+	// Provider and Model carry the routed pair the probe answered about, so a
+	// refusal can name what was routed instead of a generic note (issue #339).
+	Provider string
+	Model    string
 }
+
+// BackendUnavailableError carries one unavailable backend's typed verdict and
+// the routed pair it answered about, so the CLI can render the problem and its
+// remedy (issue #339) without re-resolving the route.
+type BackendUnavailableError struct {
+	Code     qaadmission.Code
+	Provider string
+	Model    string
+}
+
+func (e *BackendUnavailableError) Error() string { return "report backend is unavailable" }
 
 // BoundRuntime is the part of a verified runtime binding that crosses the
 // backend port. A binding carries far more than this — Pi retains file
@@ -149,10 +164,10 @@ func (piBackend) ProbeAvailability(ctx context.Context, bound BoundRuntime, rout
 	}
 	probes := probeAvailability(ctx, pi, route.Provider, route.Model)
 	if !probes.model.Available {
-		return AvailabilityVerdict{Code: probes.model.Code}
+		return AvailabilityVerdict{Code: probes.model.Code, Provider: route.Provider, Model: route.Model}
 	}
 	if !probes.auth.Ready {
-		return AvailabilityVerdict{Code: probes.auth.Code}
+		return AvailabilityVerdict{Code: probes.auth.Code, Provider: route.Provider, Model: route.Model}
 	}
 	return AvailabilityVerdict{Available: true}
 }

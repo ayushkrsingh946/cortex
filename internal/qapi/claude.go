@@ -226,30 +226,30 @@ func bindClaude(ctx context.Context, cwd string, resolver PathResolver) (boundCl
 // nothing else.
 func parseClaudeReportStream(data []byte) (string, *ReportNormalizationError) {
 	if len(data) == 0 {
-		return "", &ReportNormalizationError{reportStageStream, reportReasonEmpty}
+		return "", &ReportNormalizationError{Stage: reportStageStream, Reason: reportReasonEmpty}
 	}
 	if data[len(data)-1] != '\n' {
-		return "", &ReportNormalizationError{reportStageStream, reportReasonUnterminated}
+		return "", &ReportNormalizationError{Stage: reportStageStream, Reason: reportReasonUnterminated}
 	}
 	if !utf8.Valid(data) {
-		return "", &ReportNormalizationError{reportStageStream, reportReasonInvalidUTF8}
+		return "", &ReportNormalizationError{Stage: reportStageStream, Reason: reportReasonInvalidUTF8}
 	}
 	report := ""
 	initialized, assistantSeen, resultSeen := false, false, false
 	for index, line := range splitStreamLines(data) {
 		event, ok := responseObject(line)
 		if !ok {
-			return "", &ReportNormalizationError{reportStageStream, reportReasonMalformedRecord}
+			return "", &ReportNormalizationError{Stage: reportStageStream, Reason: reportReasonMalformedRecord}
 		}
 		kind, ok := stringField(event, "type")
 		if !ok {
-			return "", &ReportNormalizationError{reportStageEnvelope, reportReasonMissingType}
+			return "", &ReportNormalizationError{Stage: reportStageEnvelope, Reason: reportReasonMissingType}
 		}
 		switch {
 		case kind == "system":
 			subtype, ok := stringField(event, "subtype")
 			if !ok {
-				return "", &ReportNormalizationError{reportStageEnvelope, reportReasonMissingType}
+				return "", &ReportNormalizationError{Stage: reportStageEnvelope, Reason: reportReasonMissingType}
 			}
 			if index == 0 && !initialized && subtype == "init" {
 				initialized = true
@@ -262,15 +262,15 @@ func parseClaudeReportStream(data []byte) (string, *ReportNormalizationError) {
 			if initialized && subtype == "thinking_tokens" {
 				continue
 			}
-			return "", &ReportNormalizationError{reportStageEnvelope, reportReasonUnexpected}
+			return "", &ReportNormalizationError{Stage: reportStageEnvelope, Reason: reportReasonUnexpected}
 		case !initialized:
 			// Nothing precedes system/init, not even an ignored event: without
 			// it there is no evidence the run started under the neutralized
 			// configuration this adapter asked for.
-			return "", &ReportNormalizationError{reportStageEnvelope, reportReasonUnexpected}
+			return "", &ReportNormalizationError{Stage: reportStageEnvelope, Reason: reportReasonUnexpected}
 		case kind == "assistant":
 			if resultSeen {
-				return "", &ReportNormalizationError{reportStageEnvelope, reportReasonUnexpected}
+				return "", &ReportNormalizationError{Stage: reportStageEnvelope, Reason: reportReasonUnexpected}
 			}
 			// Live Claude Code 2.1.303 streams one turn as several assistant
 			// events (a thinking event followed by the text event). Every one
@@ -283,10 +283,10 @@ func parseClaudeReportStream(data []byte) (string, *ReportNormalizationError) {
 			}
 		case kind == "result":
 			if !assistantSeen {
-				return "", &ReportNormalizationError{reportStageEnvelope, reportReasonUnexpected}
+				return "", &ReportNormalizationError{Stage: reportStageEnvelope, Reason: reportReasonUnexpected}
 			}
 			if resultSeen {
-				return "", &ReportNormalizationError{reportStageResult, reportReasonExtraMessages}
+				return "", &ReportNormalizationError{Stage: reportStageResult, Reason: reportReasonExtraMessages}
 			}
 			resultSeen = true
 			text, diagnostic := claudeTerminalResult(event)
@@ -297,7 +297,7 @@ func parseClaudeReportStream(data []byte) (string, *ReportNormalizationError) {
 		}
 	}
 	if !resultSeen {
-		return "", &ReportNormalizationError{reportStageStream, reportReasonIncomplete}
+		return "", &ReportNormalizationError{Stage: reportStageStream, Reason: reportReasonIncomplete}
 	}
 	return report, nil
 }
@@ -309,34 +309,34 @@ func parseClaudeReportStream(data []byte) (string, *ReportNormalizationError) {
 func claudeAssistantMessage(event map[string]json.RawMessage) *ReportNormalizationError {
 	var message map[string]json.RawMessage
 	if json.Unmarshal(event["message"], &message) != nil {
-		return &ReportNormalizationError{reportStageMessage, reportReasonInvalidMessage}
+		return &ReportNormalizationError{Stage: reportStageMessage, Reason: reportReasonInvalidMessage}
 	}
 	role, ok := stringField(message, "role")
 	var content []json.RawMessage
 	if !ok || role != "assistant" || json.Unmarshal(message["content"], &content) != nil || len(content) == 0 {
-		return &ReportNormalizationError{reportStageMessage, reportReasonInvalidMessage}
+		return &ReportNormalizationError{Stage: reportStageMessage, Reason: reportReasonInvalidMessage}
 	}
 	for _, raw := range content {
 		var block map[string]json.RawMessage
 		if json.Unmarshal(raw, &block) != nil {
-			return &ReportNormalizationError{reportStageMessage, reportReasonInvalidMessage}
+			return &ReportNormalizationError{Stage: reportStageMessage, Reason: reportReasonInvalidMessage}
 		}
 		kind, ok := stringField(block, "type")
 		if !ok {
-			return &ReportNormalizationError{reportStageMessage, reportReasonInvalidMessage}
+			return &ReportNormalizationError{Stage: reportStageMessage, Reason: reportReasonInvalidMessage}
 		}
 		switch kind {
 		case "tool_use", "server_tool_use", "tool_result", "mcp_tool_use", "mcp_tool_result":
-			return &ReportNormalizationError{reportStageMessage, reportReasonToolCall}
+			return &ReportNormalizationError{Stage: reportStageMessage, Reason: reportReasonToolCall}
 		case "thinking", "redacted_thinking":
 			// A thinking block is validated as a known block and discarded; it
 			// is never surfaced as report content.
 		case "text":
 			if !stringFieldPresent(block, "text") {
-				return &ReportNormalizationError{reportStageMessage, reportReasonInvalidText}
+				return &ReportNormalizationError{Stage: reportStageMessage, Reason: reportReasonInvalidText}
 			}
 		default:
-			return &ReportNormalizationError{reportStageMessage, reportReasonInvalidText}
+			return &ReportNormalizationError{Stage: reportStageMessage, Reason: reportReasonInvalidText}
 		}
 	}
 	return nil
@@ -353,22 +353,22 @@ func claudeAssistantMessage(event map[string]json.RawMessage) *ReportNormalizati
 func claudeTerminalResult(event map[string]json.RawMessage) (string, *ReportNormalizationError) {
 	var turns *float64
 	if json.Unmarshal(event["num_turns"], &turns) != nil || turns == nil || *turns != 1 {
-		return "", &ReportNormalizationError{reportStageResult, reportReasonTurnMismatch}
+		return "", &ReportNormalizationError{Stage: reportStageResult, Reason: reportReasonTurnMismatch}
 	}
 	var failed *bool
 	if json.Unmarshal(event["is_error"], &failed) != nil || failed == nil {
-		return "", &ReportNormalizationError{reportStageResult, reportReasonInvalidMessage}
+		return "", &ReportNormalizationError{Stage: reportStageResult, Reason: reportReasonInvalidMessage}
 	}
 	if *failed {
 		reason, _ := stringField(event, "terminal_reason")
 		if reason == claudeAPIErrorReason {
-			return "", &ReportNormalizationError{reportStageResult, reportReasonBackendUnavailable}
+			return "", &ReportNormalizationError{Stage: reportStageResult, Reason: reportReasonBackendUnavailable}
 		}
-		return "", &ReportNormalizationError{reportStageResult, reportReasonBackendFailed}
+		return "", &ReportNormalizationError{Stage: reportStageResult, Reason: reportReasonBackendFailed}
 	}
 	text, ok := stringField(event, "result")
 	if !ok {
-		return "", &ReportNormalizationError{reportStageResult, reportReasonInvalidText}
+		return "", &ReportNormalizationError{Stage: reportStageResult, Reason: reportReasonInvalidText}
 	}
 	return text, nil
 }
