@@ -448,3 +448,60 @@ func TestRunInstallRejectsTheRemovedOptIn(t *testing.T) {
 		}
 	}
 }
+
+func TestInstallHermesProfileFlagResolvesNamedProfileRoot(t *testing.T) {
+	home := canonicalHome(t)
+	deps := compatibleInstallDependencies(t, home)
+	var stdout, stderr bytes.Buffer
+	if code := runWithInstallDependencies(context.Background(), []string{"install", "--hermes-profile", "fleet"}, &stdout, &stderr, compatibleRunnerAllDetected(), deps); code != exitOK {
+		t.Fatalf("install exit = %d, stderr = %q", code, stderr.String())
+	}
+	if _, err := os.Stat(filepath.Join(home, ".hermes", "profiles", "fleet", ".cortex", "install-state.json")); err != nil {
+		t.Fatalf("named profile install state = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".hermes", ".cortex", "install-state.json")); err == nil {
+		t.Fatal("default hermes root was written while a named profile was selected")
+	}
+	if _, err := os.Stat(filepath.Join(home, ".hermes", "profiles", "fleet", "skills")); err != nil {
+		t.Fatalf("named profile skills root = %v", err)
+	}
+}
+
+func TestInstallRejectsAnInvalidHermesProfileName(t *testing.T) {
+	home := canonicalHome(t)
+	deps := compatibleInstallDependencies(t, home)
+	var stdout, stderr bytes.Buffer
+	if code := runWithInstallDependencies(context.Background(), []string{"install", "--hermes-profile", "../escape"}, &stdout, &stderr, compatibleRunnerAllDetected(), deps); code != exitFailure && code != exitUsage {
+		t.Fatalf("install exit = %d, stderr = %q", code, stderr.String())
+	}
+	if _, err := os.Stat(filepath.Join(home, ".hermes")); err == nil {
+		t.Fatal("invalid profile name touched the filesystem")
+	}
+}
+
+func TestParseInstallArgs(t *testing.T) {
+	if profile, ok := parseInstallArgs([]string{"install"}); !ok || profile != "" {
+		t.Fatalf("bare install = (%q, %t)", profile, ok)
+	}
+	if profile, ok := parseInstallArgs([]string{"install", "--hermes-profile", "fleet"}); !ok || profile != "fleet" {
+		t.Fatalf("profile install = (%q, %t)", profile, ok)
+	}
+	if _, ok := parseInstallArgs([]string{"install", "--hermes-profile"}); ok {
+		t.Fatal("dangling --hermes-profile accepted")
+	}
+	if _, ok := parseInstallArgs([]string{"install", "--hermes-profile", "a", "--hermes-profile", "b"}); ok {
+		t.Fatal("duplicate --hermes-profile accepted")
+	}
+	if _, ok := parseInstallArgs([]string{"install", "--unknown"}); ok {
+		t.Fatal("unknown install flag accepted")
+	}
+}
+
+func compatibleRunnerAllDetected() *fakeRunner {
+	return &fakeRunner{runs: map[string]fakeRun{
+		"/private/pi":       {execution: runtimeprobe.Execution{Stdout: []byte("1.2.3\n")}},
+		"/private/opencode": {execution: runtimeprobe.Execution{Stdout: []byte("2.3.4\n")}},
+		"/private/claude":   {execution: runtimeprobe.Execution{Stdout: []byte("3.4.5 (Claude Code)")}},
+		"/private/hermes":   {execution: runtimeprobe.Execution{Stdout: []byte("0.4.2\n")}},
+	}}
+}

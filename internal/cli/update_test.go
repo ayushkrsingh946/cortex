@@ -480,3 +480,16 @@ func TestUpdatePlanReportsModeDrift(t *testing.T) {
 		t.Fatalf("stdout %q does not have status=planned or contains status=conflict", stdout)
 	}
 }
+
+func TestUpdateHermesProfileFlagResolvesNamedProfileRoot(t *testing.T) {
+	fixture := newUpdateFixture(t)
+	fixture.catalog, fixture.patched = must(filepath.Abs(fixture.catalog)), must(filepath.Abs(fixture.patched))
+	deps := fixture.dependencies(runtimematrix.RuntimeHermes)
+	// A named Hermes profile is a fresh root: without a prior install state the
+	// update must refuse, proving the flag changed the resolved root away from
+	// the default ~/.hermes skills root.
+	code, stdout, stderr := runUpdateCommand(t, deps, "update", "--runtime", "hermes", "--catalog", fixture.catalog, "--hermes-profile", "fleet")
+	if code != exitUnknown || !strings.Contains(stdout, "runtime_root_absent") || stderr != "" {
+		t.Fatalf("update with named profile = (%d, %q, %q)", code, stdout, stderr)
+	}
+}
