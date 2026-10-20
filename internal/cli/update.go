@@ -162,7 +162,7 @@ func parseUpdateArgs(args []string) (runtimematrix.RuntimeID, string, bool, bool
 		}
 	}
 	switch runtimematrix.RuntimeID(runtimeID) {
-	case runtimematrix.RuntimePi, runtimematrix.RuntimeOpenCode, runtimematrix.RuntimeClaudeCode:
+	case runtimematrix.RuntimePi, runtimematrix.RuntimeOpenCode, runtimematrix.RuntimeClaudeCode, runtimematrix.RuntimeHermes:
 	default:
 		return "", "", false, false, false
 	}

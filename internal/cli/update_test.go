@@ -27,7 +27,7 @@ import (
 	"github.com/refactor-ia/cortex/internal/skillroot"
 )
 
-var updateRuntimeIDs = []runtimematrix.RuntimeID{runtimematrix.RuntimePi, runtimematrix.RuntimeOpenCode, runtimematrix.RuntimeClaudeCode}
+var updateRuntimeIDs = []runtimematrix.RuntimeID{runtimematrix.RuntimePi, runtimematrix.RuntimeOpenCode, runtimematrix.RuntimeClaudeCode, runtimematrix.RuntimeHermes}
 
 // updateFixture is a disposable CLI fixture: the production catalog, a patched
 // copy for change scenarios, three empty runtime roots, and unrelated user
@@ -308,6 +308,7 @@ func TestUpdateRefusalsLeaveFixturesUnchanged(t *testing.T) {
 				{ID: runtimematrix.RuntimePi, Present: true, Compatibility: runtimematrix.CompatibilityUnknown},
 				{ID: runtimematrix.RuntimeOpenCode, Present: false, Compatibility: runtimematrix.CompatibilityUnknown},
 				{ID: runtimematrix.RuntimeClaudeCode, Present: false, Compatibility: runtimematrix.CompatibilityUnknown},
+				{ID: runtimematrix.RuntimeHermes, Present: true, Version: "0.4.2", Compatibility: runtimematrix.CompatibilityUnknown},
 			}, nil
 		},
 		resolveInputs: fixture.dependencies(runtimematrix.RuntimePi).resolveInputs,
@@ -328,6 +329,7 @@ func TestUpdateRefusalsLeaveFixturesUnchanged(t *testing.T) {
 				{ID: runtimematrix.RuntimePi, Present: true, Version: "9.9.9", Compatibility: runtimematrix.Incompatible},
 				{ID: runtimematrix.RuntimeOpenCode, Present: false, Compatibility: runtimematrix.CompatibilityUnknown},
 				{ID: runtimematrix.RuntimeClaudeCode, Present: false, Compatibility: runtimematrix.CompatibilityUnknown},
+				{ID: runtimematrix.RuntimeHermes, Present: true, Version: "0.4.2", Compatibility: runtimematrix.CompatibilityUnknown},
 			}, nil
 		},
 		resolveInputs: unknown.resolveInputs,

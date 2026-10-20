@@ -405,7 +405,7 @@ func defaultUninstallDependencies() uninstallDependencies {
 
 func runUninstall(stdout, stderr io.Writer, deps uninstallDependencies) int {
 	roots, err := deps.resolveRoots()
-	if err != nil || len(roots) != 3 || roots[0].RuntimeID() != runtimematrix.RuntimePi ||
+	if err != nil || len(roots) != 4 || roots[0].RuntimeID() != runtimematrix.RuntimePi ||
 		roots[1].RuntimeID() != runtimematrix.RuntimeOpenCode || roots[2].RuntimeID() != runtimematrix.RuntimeClaudeCode {
 		writeError(stderr, "uninstall_root_resolution_failed")
 		return exitFailure

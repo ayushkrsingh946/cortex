@@ -278,6 +278,7 @@ func compatibleInstallDependencies(t *testing.T, home string) installDependencie
 		{ID: runtimematrix.RuntimePi, CertifiedCompatible: []string{"1.2.3"}},
 		{ID: runtimematrix.RuntimeOpenCode, KnownIncompatible: []string{"2.3.4"}},
 		{ID: runtimematrix.RuntimeClaudeCode},
+		{ID: runtimematrix.RuntimeHermes},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -299,6 +300,7 @@ func uncertifiedRunner() *fakeRunner {
 		"/private/pi":       {execution: runtimeprobe.Execution{Stdout: []byte("9.9.9\n")}},
 		"/private/opencode": {execution: runtimeprobe.Execution{Stdout: []byte("9.9.9\n")}},
 		"/private/claude":   {execution: runtimeprobe.Execution{Stdout: []byte("9.9.9 (Claude Code)")}},
+		"/private/hermes":   {execution: runtimeprobe.Execution{Stdout: []byte("9.9.9\n")}},
 	}}
 }
 
@@ -312,10 +314,10 @@ func TestRunInstallAdmitsEveryPresentUncertifiedRuntimeByDefault(t *testing.T) {
 	if !strings.Contains(stdout.String(), "operation=install status=completed touch=applied") {
 		t.Fatalf("install output = %q", stdout.String())
 	}
-	if !strings.Contains(stdout.String(), " warning=uncertified_admission runtimes=3 certification=not_certified\n") {
+	if !strings.Contains(stdout.String(), " warning=uncertified_admission runtimes=4 certification=not_certified\n") {
 		t.Fatalf("missing disclosure in %q", stdout.String())
 	}
-	for _, id := range []string{"pi", "opencode", "claude-code"} {
+	for _, id := range []string{"pi", "opencode", "claude-code", "hermes"} {
 		if !strings.Contains(stdout.String(), "runtime="+id+" presence=present compatibility=uncertified action=configure touch=applied\n") {
 			t.Fatalf("runtime %s was not admitted: %q", id, stdout.String())
 		}
@@ -348,7 +350,8 @@ func TestRunInstallRefusesWhenNoRuntimeIsAdmissible(t *testing.T) {
 		want := "operation=" + operation + " status=not_applied reason=compatibility_uncertified touch=denied\n" +
 			"runtime=pi presence=absent action=warn touch=denied\n" +
 			"runtime=opencode presence=present compatibility=incompatible action=skip touch=denied\n" +
-			"runtime=claude-code presence=present compatibility=unknown action=warn touch=denied\n"
+			"runtime=claude-code presence=present compatibility=unknown action=warn touch=denied\n" +
+			"runtime=hermes presence=present compatibility=unknown action=warn touch=denied\n"
 		if stdout.String() != want || stderr.Len() != 0 {
 			t.Fatalf("%s = (%q, %q), want %q", operation, stdout.String(), stderr.String(), want)
 		}
@@ -376,7 +379,8 @@ func TestRunInstallNeverAdmitsAnUnparseableVersion(t *testing.T) {
 	want := "operation=install status=not_applied reason=compatibility_uncertified touch=denied\n" +
 		"runtime=pi presence=present compatibility=unknown action=warn touch=denied\n" +
 		"runtime=opencode presence=present compatibility=unknown action=warn touch=denied\n" +
-		"runtime=claude-code presence=present compatibility=unknown action=warn touch=denied\n"
+		"runtime=claude-code presence=present compatibility=unknown action=warn touch=denied\n" +
+		"runtime=hermes presence=present compatibility=unknown action=warn touch=denied\n"
 	if stdout.String() != want || stderr.Len() != 0 {
 		t.Fatalf("install = (%q, %q), want %q", stdout.String(), stderr.String(), want)
 	}
@@ -403,7 +407,7 @@ func TestRunInstallSkipsOnlyTheKnownIncompatibleRuntime(t *testing.T) {
 	home := t.TempDir()
 	deps := compatibleInstallDependencies(t, home)
 	runner := &fakeRunner{
-		lookup: map[string]error{"claude": exec.ErrNotFound},
+		lookup: map[string]error{"claude": exec.ErrNotFound, "hermes": exec.ErrNotFound},
 		runs: map[string]fakeRun{
 			"/private/pi":       {execution: runtimeprobe.Execution{Stdout: []byte("9.9.9\n")}},
 			"/private/opencode": {execution: runtimeprobe.Execution{Stdout: []byte("2.3.4\n")}},
@@ -415,7 +419,8 @@ func TestRunInstallSkipsOnlyTheKnownIncompatibleRuntime(t *testing.T) {
 	}
 	want := "runtime=pi presence=present compatibility=uncertified action=configure touch=applied\n" +
 		"runtime=opencode presence=present compatibility=incompatible action=skip touch=denied\n" +
-		"runtime=claude-code presence=absent action=warn touch=denied\n"
+		"runtime=claude-code presence=absent action=warn touch=denied\n" +
+		"runtime=hermes presence=absent action=warn touch=denied\n"
 	if !strings.HasSuffix(stdout.String(), want) {
 		t.Fatalf("install output = %q, want suffix %q", stdout.String(), want)
 	}
