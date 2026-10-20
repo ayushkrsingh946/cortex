@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/refactor-ia/cortex/internal/installobserve"
+	"github.com/refactor-ia/cortex/internal/installstate"
 	"github.com/refactor-ia/cortex/internal/qaadmission"
 	"github.com/refactor-ia/cortex/internal/qapi"
 	"github.com/refactor-ia/cortex/internal/qarole"
@@ -63,7 +64,7 @@ func runWithDependencies(ctx context.Context, args []string, stdout, stderr io.W
 	if len(args) == 0 || len(args) == 1 && (args[0] == "help" || args[0] == "--help") {
 		return writeHelp(stdout, stderr, rootHelp)
 	}
-	if len(args) != 1 && args[0] != "qa" && args[0] != "update" && args[0] != "install" && args[0] != "uninstall" {
+	if len(args) != 1 && args[0] != "qa" && args[0] != "update" && args[0] != "install" && args[0] != "uninstall" && args[0] != "doctor" {
 		writeError(stderr, "invalid_command")
 		return exitUsage
 	}
@@ -71,7 +72,7 @@ func runWithDependencies(ctx context.Context, args []string, stdout, stderr io.W
 	case "--version":
 		return runVersion(stdout, stderr)
 	case "doctor":
-		return runDoctor(ctx, stdout, stderr, runner, install.policy, skillroot.ResolveSystemUninstallRoots)
+		return runDoctorCommand(ctx, args[1:], stdout, stderr, runner, install.policy, skillroot.ResolveSystemUninstallRoots)
 	case "qa":
 		return runQA(ctx, args[1:], stdout, stderr)
 	case "update":
@@ -89,6 +90,85 @@ func runWithDependencies(ctx context.Context, args []string, stdout, stderr io.W
 		writeError(stderr, "invalid_command")
 		return exitUsage
 	}
+}
+
+// runDoctorCommand dispatches the probed doctor and the directory-target
+// doctor (issue #343). A --target-dir report skips the runtime matrix: the
+// directory has no host to probe, and its presence, writability, and prior
+// ownership are the whole answer to whether an install into it can proceed.
+func runDoctorCommand(ctx context.Context, args []string, stdout, stderr io.Writer, runner runtimeprobe.Runner, policy runtimecompat.Policy, resolveRoots func() ([]skillroot.UninstallRoot, error)) int {
+	targetDir := ""
+	for index := 0; index < len(args); index++ {
+		switch args[index] {
+		case "--target-dir":
+			if targetDir != "" || index+1 >= len(args) {
+				writeError(stderr, "invalid_command")
+				return exitUsage
+			}
+			targetDir = args[index+1]
+			index++
+		default:
+			writeError(stderr, "invalid_command")
+			return exitUsage
+		}
+	}
+	if targetDir == "" {
+		return runDoctor(ctx, stdout, stderr, runner, policy, resolveRoots)
+	}
+	return runDoctorDirectoryTarget(stdout, targetDir)
+}
+
+// runDoctorDirectoryTarget reports one directory target as distinct explicit
+// states: presence, writability, and prior ownership. An unwritable directory
+// or an unreadable prior state conflicts exactly the way install would.
+func runDoctorDirectoryTarget(stdout io.Writer, targetDir string) int {
+	line := "target=" + targetDir
+	code := exitOK
+	info, err := os.Stat(targetDir)
+	switch {
+	case os.IsNotExist(err):
+		line += " presence=absent"
+	case err != nil || !info.IsDir():
+		line += " presence=unreadable"
+		code = exitConflict
+	default:
+		line += " presence=present"
+		writable := false
+		probe, probeErr := os.CreateTemp(targetDir, ".cortex-doctor-*")
+		if probeErr == nil {
+			writable = true
+			name := probe.Name()
+			_ = probe.Close()
+			_ = os.Remove(name)
+		}
+		if writable {
+			line += " writability=writable"
+		} else {
+			line += " writability=unwritable"
+			code = exitConflict
+		}
+		line += " ownership=" + doctorTargetOwnership(targetDir)
+	}
+	if _, err := io.WriteString(stdout, line+"\n"); err != nil {
+		return exitFailure
+	}
+	return code
+}
+
+// doctorTargetOwnership classifies the prior state of a directory target:
+// unowned (no state file), owned (a canonical state this build decodes), or
+// invalid (a state file it cannot classify, which blocks install like the
+// canonical prior-state blocker does).
+func doctorTargetOwnership(targetDir string) string {
+	state, err := os.ReadFile(filepath.Join(targetDir, ".cortex", "install-state.json"))
+	if err != nil {
+		return "unowned"
+	}
+	manifest, err := installstate.Decode(state)
+	if err != nil || manifest.RuntimeID() != runtimematrix.RuntimeDirectory {
+		return "invalid"
+	}
+	return "owned"
 }
 
 func runDoctor(ctx context.Context, stdout, stderr io.Writer, runner runtimeprobe.Runner, policy runtimecompat.Policy, resolveRoots func() ([]skillroot.UninstallRoot, error)) int {
@@ -172,6 +252,7 @@ const (
 		"so frame directives stay rejected while the quoted diff passes validation (issue #305).\n"
 	rootHelp = "usage: cortex <command> [arguments]\ncommands: doctor, install, update, uninstall, qa\noptions: --version, --help\n" +
 		"install [--target-dir <dir>]: configure every compatible present runtime, or project the\ncatalog as plain SKILL.md files into an existing directory (Agent Skills layout)\n" +
+		"doctor [--target-dir <dir>]: probe runtimes, or report one directory target\n" +
 		"uninstall [--target-dir <dir>]: remove owned files from every runtime root, or from <dir>\n\n" + qaHelp
 	// qaReportNote surfaces runtime prerequisites on non-catalog failures.
 	// The default route provider is the policy placeholder "nan"; Cortex applies
