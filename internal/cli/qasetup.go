@@ -67,6 +67,7 @@ func runQASetup(ctx context.Context, args []string, stdout, stderr io.Writer) in
 			writeError(stderr, "model_unavailable")
 			_, _ = io.WriteString(stderr, "available models:\n")
 			_, _ = io.WriteString(stderr, sortedModelPairs(models))
+			_, _ = io.WriteString(stderr, qaModelUnavailableNote())
 			return exitFailure
 		}
 	}
