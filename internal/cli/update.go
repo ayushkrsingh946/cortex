@@ -55,8 +55,10 @@ func runUpdate(ctx context.Context, args []string, stdout, stderr io.Writer, run
 	return runWithUpdateDependencies(ctx, args, stdout, stderr, runner, defaultUpdateDependencies())
 }
 
-const updateHelp = "usage: cortex update --runtime <pi|opencode|claude-code> --catalog <dir> [--apply] [--adopt-guidance]\n\n" +
+const updateHelp = "usage: cortex update --runtime <pi|opencode|claude-code> --catalog <dir> [--apply] [--adopt-guidance]\n" +
+	"       cortex update --target-dir <dir> --catalog <dir> [--apply]\n\n" +
 	"Default mode is a read-only plan; --apply is required to write.\n" +
+	"--target-dir refreshes a previously installed directory target.\n" +
 	"--adopt-guidance is Pi-only explicit adoption of verified legacy external guidance.\n" +
 	"Registered guidance updates need no repeated adoption; drift is always refused.\n" +
 	"Composed restart recovery is unsupported; the rollback command does not support it.\n" +
@@ -70,10 +72,13 @@ func runWithUpdateDependencies(ctx context.Context, args []string, stdout, stder
 		writeError(stderr, "invalid_command")
 		return exitUsage
 	}
-	runtimeID, catalogDir, apply, adoptGuidance, ok := parseUpdateArgs(args[1:])
+	runtimeID, catalogDir, apply, adoptGuidance, targetDir, ok := parseUpdateArgs(args[1:])
 	if !ok {
 		writeError(stderr, "invalid_command")
 		return exitUsage
+	}
+	if targetDir != "" {
+		return runDirectoryUpdate(stdout, stderr, targetDir, catalogDir, apply)
 	}
 	reports, err := probe(ctx, runner)
 	if err != nil {
@@ -128,48 +133,60 @@ func runWithUpdateDependencies(ctx context.Context, args []string, stdout, stder
 	return applyUpdate(stdout, stderr, plan, observation, classified, observations, warning)
 }
 
-// parseUpdateArgs accepts exactly one --runtime and one --catalog plus an
-// optional --apply and Pi-only --adopt-guidance; there is no default runtime.
-func parseUpdateArgs(args []string) (runtimematrix.RuntimeID, string, bool, bool, bool) {
-	var runtimeID, catalogDir string
+// parseUpdateArgs accepts exactly one --runtime or one --target-dir plus one
+// --catalog and an optional --apply (Pi-only --adopt-guidance); there is no
+// default runtime or target. The two selection modes are mutually exclusive.
+func parseUpdateArgs(args []string) (runtimematrix.RuntimeID, string, bool, bool, string, bool) {
+	var runtimeID, catalogDir, targetDir string
 	apply, adoptGuidance := false, false
 	for len(args) > 0 {
 		flag := args[0]
 		args = args[1:]
 		switch flag {
 		case "--runtime":
-			if runtimeID != "" || len(args) == 0 {
-				return "", "", false, false, false
+			if runtimeID != "" || targetDir != "" || len(args) == 0 {
+				return "", "", false, false, "", false
 			}
 			runtimeID, args = args[0], args[1:]
+		case "--target-dir":
+			if targetDir != "" || runtimeID != "" || len(args) == 0 {
+				return "", "", false, false, "", false
+			}
+			targetDir, args = args[0], args[1:]
 		case "--catalog":
 			if catalogDir != "" || len(args) == 0 {
-				return "", "", false, false, false
+				return "", "", false, false, "", false
 			}
 			catalogDir, args = args[0], args[1:]
 		case "--apply":
 			if apply {
-				return "", "", false, false, false
+				return "", "", false, false, "", false
 			}
 			apply = true
 		case "--adopt-guidance":
 			if adoptGuidance {
-				return "", "", false, false, false
+				return "", "", false, false, "", false
 			}
 			adoptGuidance = true
 		default:
-			return "", "", false, false, false
+			return "", "", false, false, "", false
 		}
+	}
+	if targetDir != "" {
+		if catalogDir == "" || adoptGuidance {
+			return "", "", false, false, "", false
+		}
+		return "", catalogDir, apply, false, targetDir, true
 	}
 	switch runtimematrix.RuntimeID(runtimeID) {
 	case runtimematrix.RuntimePi, runtimematrix.RuntimeOpenCode, runtimematrix.RuntimeClaudeCode:
 	default:
-		return "", "", false, false, false
+		return "", "", false, false, "", false
 	}
 	if catalogDir == "" || (adoptGuidance && runtimematrix.RuntimeID(runtimeID) != runtimematrix.RuntimePi) {
-		return "", "", false, false, false
+		return "", "", false, false, "", false
 	}
-	return runtimematrix.RuntimeID(runtimeID), catalogDir, apply, adoptGuidance, true
+	return runtimematrix.RuntimeID(runtimeID), catalogDir, apply, adoptGuidance, "", true
 }
 
 // buildUpdateCandidate builds the validated bundle-bound candidate for the
@@ -210,6 +227,113 @@ func buildUpdateCandidate(runtimeID runtimematrix.RuntimeID, catalogDir string, 
 		}
 	}
 	return installplan.Plan{}, fmt.Errorf("catalog projection has no artifacts for %s", runtimeID)
+}
+
+// runDirectoryUpdate refreshes a previously installed directory target from
+// the explicitly supplied catalog (issue #342). It mirrors the probed update
+// flow without any runtime observation: the candidate pipeline is the same,
+// resolved into the caller-owned root, and readiness is revalidated through
+// installcoord.PreflightDirectoryTarget before any write.
+func runDirectoryUpdate(stdout, stderr io.Writer, targetDir, catalogDir string, apply bool) int {
+	decision := runtimematrix.DirectoryTargetMatrix().Decisions[0]
+	info, err := os.Stat(targetDir)
+	if err != nil || !info.IsDir() {
+		return writeUpdateRefusal(stdout, decision, "target_absent")
+	}
+	plan, err := buildDirectoryUpdateCandidate(targetDir, catalogDir)
+	if err != nil {
+		writeError(stderr, "invalid_catalog")
+		return exitFailure
+	}
+	if _, err := os.Lstat(plan.RootPath()); err != nil {
+		return writeUpdateRefusal(stdout, decision, "runtime_root_absent")
+	}
+	observation, err := installobserve.Observe(plan, installobserve.DefaultOptions())
+	if err != nil {
+		writeError(stderr, "observation_failed")
+		return exitFailure
+	}
+	// An update refreshes an existing installation. A target with no prior
+	// Cortex-owned state has nothing to refresh, so it fails closed instead of
+	// turning an update into a first install (issue #342).
+	if observation.PriorState() == nil {
+		return writeUpdateRefusal(stdout, decision, "not_installed")
+	}
+	classified, err := installcoord.Classify(plan, observation)
+	if err != nil {
+		writeError(stderr, "classification_failed")
+		return exitFailure
+	}
+	header := fmt.Sprintf("runtime=%s outcome=%s action=%s root=%s mode=plan", decision.ID, decision.Outcome, decision.Action, plan.RootPath())
+	if !apply {
+		return writeUpdateOperations(stdout, header, classified, "planned")
+	}
+	return applyDirectoryUpdate(stdout, stderr, plan, observation, classified, header)
+}
+
+// buildDirectoryUpdateCandidate builds the validated skill-only candidate for
+// the directory target from the operator-supplied catalog. Admit is unset on
+// purpose: the catalog comes from the command line, so the built-in release
+// admission does not apply to it.
+func buildDirectoryUpdateCandidate(targetDir, catalogDir string) (installplan.Plan, error) {
+	snapshot, err := catalog.BuildCatalogSnapshot(catalogDir, "catalog.json", catalog.AdmissionPolicy{})
+	if err != nil {
+		return installplan.Plan{}, err
+	}
+	candidates, _, err := installcoord.BuildCandidates(installcoord.CandidateRequest{
+		Snapshot:        snapshot,
+		DirectoryTarget: true,
+		ResolveRoot: func(symbolic skilldest.Plan) (skillroot.Plan, error) {
+			return skillroot.ResolveIntoDirectory(symbolic, targetDir)
+		},
+	})
+	if err != nil {
+		return installplan.Plan{}, err
+	}
+	if len(candidates) == 1 {
+		return candidates[0].Plan, nil
+	}
+	return installplan.Plan{}, fmt.Errorf("catalog projection has no artifacts for %s", runtimematrix.RuntimeDirectory)
+}
+
+// applyDirectoryUpdate applies one classified directory-target update. The
+// backup lives under the target's own .cortex directory like every local
+// update, keeping rollback with the state it rolls back.
+func applyDirectoryUpdate(stdout, stderr io.Writer, plan installplan.Plan, observation installobserve.FilesystemObservation, classified installobserve.Result, header string) int {
+	report, err := installcoord.PreflightDirectoryTarget([]installcoord.Unit{{Plan: plan, Observation: observation}})
+	if err != nil {
+		writeError(stderr, "preflight_failed")
+		return exitFailure
+	}
+	if !report.Ready() {
+		return writeUpdateOperations(stdout, header, classified, "conflict")
+	}
+	backupRoot := filepath.Join(plan.RootPath(), ".cortex")
+	if err := os.MkdirAll(backupRoot, 0o700); err != nil {
+		writeError(stderr, "backup_unavailable")
+		return exitTransaction
+	}
+	backupName := nextUpdateBackupName()
+	result, txErr := applyCandidate(plan, observation, backupRoot, backupName)
+	if txErr != nil {
+		if errors.Is(txErr, installtxn.ErrConflict) {
+			return writeUpdateOperations(stdout, header, classified, "conflict")
+		}
+		writeError(stderr, "update_transaction_failed")
+		return exitTransaction
+	}
+	output := strings.Builder{}
+	fmt.Fprintf(&output, "%s\n", strings.Replace(header, "mode=plan", "mode=apply", 1))
+	for _, action := range result.Actions() {
+		fmt.Fprintf(&output, "operation=%s action=%s\n", action.LogicalID, action.Action)
+	}
+	fmt.Fprintf(&output, "backup=%s\n", backupName)
+	if result.TransactionID().Valid() {
+		fmt.Fprintf(&output, "transaction=%s\n", result.TransactionID())
+	}
+	fmt.Fprintf(&output, "status=applied\n")
+	_, _ = io.WriteString(stdout, output.String())
+	return exitOK
 }
 
 // bindPiActors binds the canonical Pi actor projection for one catalog snapshot.

@@ -231,7 +231,7 @@ func validateGroupRequests(requests []GroupRequest) error {
 }
 
 func runtimeRank(id runtimematrix.RuntimeID) int {
-	for index, canonical := range []runtimematrix.RuntimeID{runtimematrix.RuntimePi, runtimematrix.RuntimeOpenCode, runtimematrix.RuntimeClaudeCode} {
+	for index, canonical := range []runtimematrix.RuntimeID{runtimematrix.RuntimePi, runtimematrix.RuntimeOpenCode, runtimematrix.RuntimeClaudeCode, runtimematrix.RuntimeDirectory} {
 		if id == canonical {
 			return index
 		}

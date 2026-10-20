@@ -105,6 +105,13 @@ func PreflightLocalUpdate(observations []runtimematrix.Observation, target runti
 	return preflight(matrix, units)
 }
 
+// PreflightDirectoryTarget preflights the directory projection mode (issue
+// #341): the single explicit directory decision replaces the probed matrix,
+// and the caller supplies exactly the unit that decision admits.
+func PreflightDirectoryTarget(units []Unit) (Report, error) {
+	return preflight(runtimematrix.DirectoryTargetMatrix(), units)
+}
+
 func preflight(matrix runtimematrix.Matrix, units []Unit) (Report, error) {
 	byRuntime := make(map[runtimematrix.RuntimeID]Unit, len(units))
 	for _, unit := range units {

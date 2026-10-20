@@ -98,6 +98,17 @@ func deriveTargets(symbolic skilldest.Plan, root string) (Plan, error) {
 	return Plan{runtimeID: string(symbolic.RuntimeID()), rootKind: symbolic.RootKind(), snapshotFingerprint: symbolic.SnapshotFingerprint(), rootPath: root, targets: targets}, nil
 }
 
+// NewUninstallRoot binds one runtime to a caller-provided canonical root
+// without I/O. The directory projection target (issue #342) uses this to name
+// the explicit path it installed into; the runtime/rootKind pair is validated
+// against the same table ResolveUninstallRoots enforces.
+func NewUninstallRoot(runtimeID runtimematrix.RuntimeID, rootKind skilldest.RootKind, rootPath string) (UninstallRoot, error) {
+	if expectedRoot(runtimeID) != rootKind || rootKind == "" || !validPath(rootPath) {
+		return UninstallRoot{}, invalid()
+	}
+	return UninstallRoot{runtimeID: runtimeID, rootKind: rootKind, rootPath: rootPath}, nil
+}
+
 // Resolve binds a symbolic plan to caller-owned user roots without I/O.
 func Resolve(symbolic skilldest.Plan, inputs Inputs) (Plan, error) {
 	if !validPath(inputs.Home) || !validSymbolic(symbolic) {
