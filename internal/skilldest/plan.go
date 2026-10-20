@@ -21,6 +21,10 @@ const (
 	RootKindPiUserAgent        RootKind = "pi-user-agent"
 	RootKindOpenCodeUserConfig RootKind = "opencode-user-config"
 	RootKindClaudeCodeUser     RootKind = "claude-code-user"
+	// RootKindDirectory is the caller-owned directory root of the directory
+	// projection target (issue #341). Unlike the symbolic user roots, the
+	// caller supplies the absolute path and owns its existence.
+	RootKindDirectory RootKind = "directory"
 )
 
 // Plan is an immutable, non-materializing destination plan.
@@ -157,6 +161,8 @@ func rootFor(runtime runtimematrix.RuntimeID) (RootKind, bool) {
 		return RootKindOpenCodeUserConfig, true
 	case runtimematrix.RuntimeClaudeCode:
 		return RootKindClaudeCodeUser, true
+	case runtimematrix.RuntimeDirectory:
+		return RootKindDirectory, true
 	default:
 		return "", false
 	}

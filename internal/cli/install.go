@@ -54,6 +54,123 @@ func runWithInstallDependencies(ctx context.Context, args []string, stdout, stde
 	return runWithDependencies(ctx, args, stdout, stderr, runner, deps, defaultUninstallDependencies())
 }
 
+// runInstallCommand dispatches the probed install and the directory projection
+// mode (issue #341). The directory mode takes no runtime observation: the
+// caller names an absolute, existing directory and the transaction applies
+// inside it with the same guarantees as a probed install.
+func runInstallCommand(ctx context.Context, args []string, stdout, stderr io.Writer, runner runtimeprobe.Runner, deps installDependencies) int {
+	target, ok, err := parseTargetDir(args[1:])
+	if err != nil {
+		writeError(stderr, "invalid_command")
+		return exitUsage
+	}
+	if !ok {
+		return runInstall(ctx, stdout, stderr, runner, args[0], deps)
+	}
+	return runDirectoryInstall(stdout, stderr, target, deps)
+}
+
+// parseTargetDir accepts --target-dir <path> and --target-dir=<path>. It
+// reports ok=false when the flag is absent so the probed install keeps its
+// zero-argument shape.
+func parseTargetDir(args []string) (string, bool, error) {
+	for index := 0; index < len(args); index++ {
+		argument := args[index]
+		value := ""
+		if strings.HasPrefix(argument, "--target-dir=") {
+			value = strings.TrimPrefix(argument, "--target-dir=")
+		} else if argument == "--target-dir" {
+			if index+1 >= len(args) {
+				return "", true, errors.New("missing --target-dir value")
+			}
+			value = args[index+1]
+			index++
+		} else {
+			return "", false, errors.New("unknown install argument")
+		}
+		// Path validity (absolute, clean, existing) is refused by
+		// runDirectoryInstall as invalid_target so every malformed path shares
+		// one explicit diagnostic.
+		return value, true, nil
+	}
+	return "", false, nil
+}
+
+// runDirectoryInstall projects the catalog into the caller-owned directory.
+// The backup root stays under the user home like every other install: backups
+// are a Cortex ownership artifact, and writing them inside the target would
+// make the projected tree depend on transaction internals.
+func runDirectoryInstall(stdout, stderr io.Writer, target string, deps installDependencies) int {
+	info, err := os.Stat(target)
+	if err != nil || !info.IsDir() {
+		writeError(stderr, "invalid_target")
+		return exitUsage
+	}
+	requests, results, err := buildDirectoryRequests(target, deps)
+	if err != nil {
+		writeError(stderr, "install_composition_failed")
+		return exitFailure
+	}
+	if len(requests) == 0 {
+		return writeInstallResult(stdout, stderr, "install", "status=not_applied reason=projection_unrepresentable touch=denied", "", results, false, installtxn.Counts{}, exitUnknown)
+	}
+	home, err := deps.home()
+	if err != nil || !existingDirectory(home) {
+		writeError(stderr, "install_composition_failed")
+		return exitFailure
+	}
+	backupName, err := deps.backupName()
+	if err != nil || !validInstallBackupName(backupName) {
+		writeError(stderr, "install_composition_failed")
+		return exitFailure
+	}
+	group, err := deps.applyGroup(requests, home, backupName)
+	if err != nil {
+		reason, code := installFailureReason(err)
+		return writeInstallResult(stdout, stderr, "install", "status=not_applied reason="+reason+" touch=denied", "", results, false, installtxn.Counts{}, code)
+	}
+	return writeInstallResult(stdout, stderr, "install", "status=completed touch=applied", "", results, true, group.Counts(), exitOK)
+}
+
+// buildDirectoryRequests is the directory-mode counterpart of
+// buildInstallRequests: the same single-implementation candidate pipeline,
+// resolved into the caller-owned root, skill-only (QA actors render as skills
+// in #344, not here).
+func buildDirectoryRequests(target string, deps installDependencies) ([]installtxn.GroupRequest, []projection.RuntimeResult, error) {
+	snapshot, err := builtinassets.Snapshot()
+	if err != nil {
+		return nil, nil, err
+	}
+	candidates, final, err := installcoord.BuildCandidates(installcoord.CandidateRequest{
+		Snapshot:        snapshot,
+		DirectoryTarget: true,
+		// The embedded catalog must be one this build was compiled to ship.
+		Admit: func(candidate catalog.CatalogSnapshot) error {
+			_, err := releasecatalog.BuiltInSource().ResolveSnapshot(candidate)
+			return err
+		},
+		ResolveRoot: func(symbolic skilldest.Plan) (skillroot.Plan, error) {
+			return skillroot.ResolveIntoDirectory(symbolic, target)
+		},
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	cwd, err := canonicalWorkingDirectory()
+	if err != nil {
+		return nil, nil, err
+	}
+	requests := make([]installtxn.GroupRequest, 0, len(candidates))
+	for _, candidate := range candidates {
+		observation, err := deps.observe(candidate.Plan, installobserve.DefaultOptions())
+		if err != nil {
+			return nil, nil, err
+		}
+		requests = append(requests, installtxn.GroupRequest{Plan: candidate.Plan, Observation: observation, CWD: cwd})
+	}
+	return requests, final.Results(), nil
+}
+
 func runInstall(ctx context.Context, stdout, stderr io.Writer, runner runtimeprobe.Runner, operation string, deps installDependencies) int {
 	reports, err := probe(ctx, runner)
 	if err != nil {

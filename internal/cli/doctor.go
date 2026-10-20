@@ -62,7 +62,7 @@ func runWithDependencies(ctx context.Context, args []string, stdout, stderr io.W
 	if len(args) == 0 || len(args) == 1 && (args[0] == "help" || args[0] == "--help") {
 		return writeHelp(stdout, stderr, rootHelp)
 	}
-	if len(args) != 1 && args[0] != "qa" && args[0] != "update" {
+	if len(args) != 1 && args[0] != "qa" && args[0] != "update" && args[0] != "install" {
 		writeError(stderr, "invalid_command")
 		return exitUsage
 	}
@@ -81,7 +81,7 @@ func runWithDependencies(ctx context.Context, args []string, stdout, stderr io.W
 		}
 		return runInstall(ctx, stdout, stderr, runner, args[0], install)
 	case "install":
-		return runInstall(ctx, stdout, stderr, runner, args[0], install)
+		return runInstallCommand(ctx, args, stdout, stderr, runner, install)
 	case "uninstall":
 		return runUninstall(stdout, stderr, uninstall)
 	default:
@@ -169,7 +169,8 @@ const (
 		`[{"id":"selected-test","command":"go test ./...","exit_code":0,"output_tail":"ok example","provenance":"caller fixture","truncated":false}]` + "\n" +
 		"To audit a code diff, prefix every diff line with '>' (blockquote): quoted lines are content,\n" +
 		"so frame directives stay rejected while the quoted diff passes validation (issue #305).\n"
-	rootHelp = "usage: cortex <command> [arguments]\ncommands: doctor, install, update, uninstall, qa\noptions: --version, --help\n\n" + qaHelp
+	rootHelp = "usage: cortex <command> [arguments]\ncommands: doctor, install, update, uninstall, qa\noptions: --version, --help\n" +
+		"install [--target-dir <dir>]: configure every compatible present runtime, or project the\ncatalog as plain SKILL.md files into an existing directory (Agent Skills layout)\n\n" + qaHelp
 	// qaReportNote surfaces runtime prerequisites on non-catalog failures.
 	// The default route provider is the policy placeholder "nan"; Cortex applies
 	// no model fallback and owns no automatic configuration.

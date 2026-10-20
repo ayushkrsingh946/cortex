@@ -10,6 +10,12 @@ const (
 	RuntimePi         RuntimeID = "pi"
 	RuntimeOpenCode   RuntimeID = "opencode"
 	RuntimeClaudeCode RuntimeID = "claude-code"
+	// RuntimeDirectory names the user-selected directory projection target
+	// (issue #341). It is deliberately absent from runtimeOrder: no probe
+	// reports it, so it never enters Decide, and probed installs keep their
+	// canonical three-runtime shape. DirectoryTargetMatrix constructs its
+	// single-target decision explicitly.
+	RuntimeDirectory RuntimeID = "directory"
 )
 
 var runtimeOrder = []RuntimeID{RuntimePi, RuntimeOpenCode, RuntimeClaudeCode}
@@ -152,6 +158,15 @@ func validate(observation Observation) error {
 		return errors.New("unknown adapter compatibility")
 	}
 	return nil
+}
+
+// DirectoryTargetMatrix returns the explicit single-target decision for the
+// directory projection mode (issue #341). Presence here means the caller
+// verified the target directory exists; the transaction still fails closed on
+// an unwritable or refusing path.
+func DirectoryTargetMatrix() Matrix {
+	decision := Decision{ID: RuntimeDirectory, Outcome: OutcomePresentCompatible, Action: Configure, IncludeInTransaction: true, TouchAllowed: true}
+	return Matrix{Decisions: []Decision{decision}, HasCompatible: true}
 }
 
 func decisionFor(observation Observation) Decision {
