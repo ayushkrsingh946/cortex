@@ -340,7 +340,7 @@ func TestReportFailureCode(t *testing.T) {
 		{reportReasonBlank, qaadmission.CodeNormalizationFailed},
 	} {
 		t.Run(test.reason, func(t *testing.T) {
-			got := reportFailureCode(&ReportNormalizationError{reportStageResult, test.reason})
+			got := reportFailureCode(&ReportNormalizationError{Stage: reportStageResult, Reason: test.reason})
 			if got != test.want {
 				t.Fatalf("reportFailureCode(%q) = %q, want %q", test.reason, got, test.want)
 			}
