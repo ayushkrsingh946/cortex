@@ -18,8 +18,9 @@ Cortex writes a curated set of agent capabilities (skills, and on Pi also agents
 | Command | Writes? | What it does |
 | --- | --- | --- |
 | `cortex doctor` | Never | Probes present runtimes, reports compatibility, and tells you whether an install can proceed. |
-| `cortex install` | Yes, transactional | Configures every compatible present runtime in one all-or-nothing transaction. |
+| `cortex install` | Yes, transactional | Configures every compatible present runtime in one all-or-nothing transaction. `--target-dir <dir>` projects the catalog into an existing directory instead. |
 | `cortex update --runtime <id> --catalog <dir>` | Only with `--apply` | Plans (default) or applies (with `--apply`) a single-runtime update. |
+| `cortex doctor --target-dir <dir>` | Never | Reports a directory target's presence, writability, and ownership. |
 | `cortex uninstall` | Yes, conservative | Removes exactly the verified Cortex-owned material; refuses on conflict. |
 | `cortex qa run --role <role> --request <file> --catalog <dir>` | Never | Evaluates a bounded request (and optional evidence file) and writes a QA report. Report-only; it does not execute tests. |
 
@@ -55,6 +56,36 @@ operation=install status=completed touch=applied create=33 replace=0 remove=0 un
 - `status=not_applied reason=projection_unrepresentable touch=denied` — a runtime exists but cannot represent a capability honestly; Cortex refused rather than approximating. Report it; do not work around it.
 - `status=not_applied reason=ownership_conflict touch=denied` (exit 3) — a target file exists without verified Cortex ownership. Someone else wrote there. Stop and ask the user; never delete or rewrite foreign files to clear the path.
 - `warning=uncertified_admission runtimes=N certification=not_certified` — the transaction configured N runtimes whose exact version has no verified evidence. This is disclosed non-certified admission, not a failure; the user may accept it once they know.
+
+## Directory targets
+
+`cortex install --target-dir <dir>` projects the catalog as plain `SKILL.md` files into an
+existing directory, with the same transactional guarantees as a runtime install: manifest,
+ownership, backup, rollback, and readback. There is no host to probe, so there is no version
+certification step; the path must already exist and be a directory.
+
+The output follows the [Agent Skills](https://agentskills.io/) specification: each capability
+lands at `skills/cortex-<name>/SKILL.md` with `name`, `description`, `license`, and
+`metadata.cortex-*` frontmatter. Any host that reads `SKILL.md` files from a directory —
+PowerShell-based agent surfaces included — consumes that layout unchanged. QA actors project
+the same way as self-contained skills; a directory target never runs `qa run` backends and
+adds no QA route.
+
+```bash
+cortex install --target-dir ./agent-skills
+
+operation=install status=completed touch=applied create=33 ...
+runtime=directory presence=present compatibility=compatible action=configure touch=applied
+```
+
+- `error=invalid_target` (exit 64) — the path is missing, relative, or not a directory.
+- Update and uninstall work on the recorded ownership:
+  `cortex update --target-dir <dir> --catalog ./catalog [--apply]` (a target with no prior
+  state is refused with `reason=not_installed` instead of becoming a first install), and
+  `cortex uninstall --target-dir <dir>` removes exactly the owned files; foreign files stay.
+- `cortex doctor --target-dir <dir>` reports `presence`, `writability`, and `ownership`
+  (`unowned`, `owned`, `invalid`) for the directory; an unwritable directory or an unreadable
+  prior state exits with the same conflict code install would hit.
 
 ## Running update
 
