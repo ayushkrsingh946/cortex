@@ -21,6 +21,7 @@ import (
 	"github.com/refactor-ia/cortex/internal/runtimecompat"
 	"github.com/refactor-ia/cortex/internal/runtimematrix"
 	"github.com/refactor-ia/cortex/internal/runtimeprobe"
+	"github.com/refactor-ia/cortex/internal/skilldest"
 	"github.com/refactor-ia/cortex/internal/skillroot"
 	"github.com/refactor-ia/cortex/internal/uninstalltxn"
 )
@@ -62,7 +63,7 @@ func runWithDependencies(ctx context.Context, args []string, stdout, stderr io.W
 	if len(args) == 0 || len(args) == 1 && (args[0] == "help" || args[0] == "--help") {
 		return writeHelp(stdout, stderr, rootHelp)
 	}
-	if len(args) != 1 && args[0] != "qa" && args[0] != "update" && args[0] != "install" {
+	if len(args) != 1 && args[0] != "qa" && args[0] != "update" && args[0] != "install" && args[0] != "uninstall" {
 		writeError(stderr, "invalid_command")
 		return exitUsage
 	}
@@ -83,7 +84,7 @@ func runWithDependencies(ctx context.Context, args []string, stdout, stderr io.W
 	case "install":
 		return runInstallCommand(ctx, args, stdout, stderr, runner, install)
 	case "uninstall":
-		return runUninstall(stdout, stderr, uninstall)
+		return runUninstallCommand(args[1:], stdout, stderr, uninstall)
 	default:
 		writeError(stderr, "invalid_command")
 		return exitUsage
@@ -170,7 +171,8 @@ const (
 		"To audit a code diff, prefix every diff line with '>' (blockquote): quoted lines are content,\n" +
 		"so frame directives stay rejected while the quoted diff passes validation (issue #305).\n"
 	rootHelp = "usage: cortex <command> [arguments]\ncommands: doctor, install, update, uninstall, qa\noptions: --version, --help\n" +
-		"install [--target-dir <dir>]: configure every compatible present runtime, or project the\ncatalog as plain SKILL.md files into an existing directory (Agent Skills layout)\n\n" + qaHelp
+		"install [--target-dir <dir>]: configure every compatible present runtime, or project the\ncatalog as plain SKILL.md files into an existing directory (Agent Skills layout)\n" +
+		"uninstall [--target-dir <dir>]: remove owned files from every runtime root, or from <dir>\n\n" + qaHelp
 	// qaReportNote surfaces runtime prerequisites on non-catalog failures.
 	// The default route provider is the policy placeholder "nan"; Cortex applies
 	// no model fallback and owns no automatic configuration.
@@ -427,6 +429,88 @@ func defaultUninstallDependencies() uninstallDependencies {
 		applyGroup:   uninstalltxn.ApplyGroup,
 		backupName:   nextUninstallBackupName,
 	}
+}
+
+// runUninstallCommand dispatches the canonical-roots uninstall and the
+// directory-target uninstall (issue #342). The directory mode takes an
+// explicit path because a directory target has no canonical user location to
+// scan: exactly the directory the caller installed into is inspected, and
+// only the files its ownership records name are removed.
+func runUninstallCommand(args []string, stdout, stderr io.Writer, deps uninstallDependencies) int {
+	targetDir := ""
+	for index := 0; index < len(args); index++ {
+		switch args[index] {
+		case "--target-dir":
+			if targetDir != "" || index+1 >= len(args) {
+				writeError(stderr, "invalid_command")
+				return exitUsage
+			}
+			targetDir = args[index+1]
+			index++
+		default:
+			writeError(stderr, "invalid_command")
+			return exitUsage
+		}
+	}
+	if targetDir == "" {
+		return runUninstall(stdout, stderr, deps)
+	}
+	return runDirectoryUninstall(targetDir, stdout, stderr, deps)
+}
+
+// runDirectoryUninstall removes exactly the Cortex-owned files of one
+// previously installed directory target and never touches foreign files.
+func runDirectoryUninstall(targetDir string, stdout, stderr io.Writer, deps uninstallDependencies) int {
+	root, err := skillroot.NewUninstallRoot(runtimematrix.RuntimeDirectory, skilldest.RootKindDirectory, targetDir)
+	if err != nil {
+		writeError(stderr, "invalid_target")
+		return exitUsage
+	}
+	trusted, err := installobserve.NewUninstallRoot(root.RuntimeID(), root.RootKind(), root.RootPath())
+	if err != nil {
+		writeError(stderr, "invalid_target")
+		return exitUsage
+	}
+	preflight := make([]uninstallPreflight, 0, 1)
+	exists, err := deps.rootExists(root.RootPath())
+	if err != nil {
+		writeError(stderr, "uninstall_observation_failed")
+		return exitFailure
+	}
+	if !exists {
+		preflight = append(preflight, uninstallPreflight{root: root, status: "not_installed"})
+		return writeUninstallResult(stdout, stderr, preflight, exitOK)
+	}
+	observation, err := deps.observe(trusted, installobserve.DefaultOptions())
+	if err != nil {
+		if len(observation.UnsupportedActorPaths()) > 0 && observation.MatchesRoot(root.RootPath()) && observation.MatchesRuntime(root.RuntimeID()) {
+			preflight = append(preflight, uninstallPreflight{root: root, observation: observation, status: "blocked"})
+			return writeUninstallResult(stdout, stderr, preflight, exitConflict)
+		}
+		writeError(stderr, "uninstall_observation_failed")
+		return exitFailure
+	}
+	status := "ready"
+	if len(observation.Records()) == 0 {
+		status = "not_installed"
+	} else if !observation.Ready() {
+		status = "conflict"
+	}
+	preflight = append(preflight, uninstallPreflight{root: root, observation: observation, status: status})
+	if status != "ready" {
+		return writeUninstallResult(stdout, stderr, preflight, exitConflict)
+	}
+	backupRoot := filepath.Join(root.RootPath(), ".cortex")
+	if err := deps.applyGroup([]uninstalltxn.GroupRequest{{RuntimeID: root.RuntimeID(), Root: root.RootPath(), Observation: observation}}, backupRoot, deps.backupName()); err != nil {
+		preflight[0].status = "failed"
+		writeError(stderr, uninstallFailureReason(err))
+		return writeUninstallResult(stdout, stderr, preflight, exitTransaction)
+	}
+	// The uninstall backup stays under the target's .cortex directory as
+	// rollback evidence; only a directory emptied by the transaction would be
+	// removed, and Remove refuses non-empty directories.
+	preflight[0].status = "completed"
+	return writeUninstallResult(stdout, stderr, preflight, exitOK)
 }
 
 func runUninstall(stdout, stderr io.Writer, deps uninstallDependencies) int {
