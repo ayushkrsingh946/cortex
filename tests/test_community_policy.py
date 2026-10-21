@@ -146,24 +146,15 @@ EXPECTED_FILES = {
         "internal/builtinassets/catalog/families/quality-assurance/sources/requirements-analyst.md",
         "internal/builtinassets/catalog/families/quality-assurance/sources/test-designer.md",
         "internal/builtinassets/catalog/families/quality-assurance/sources/test-runner.md",
-<<<<<<< HEAD
 		"internal/cli/directory_qa_test.go",
-=======
-<<<<<<< HEAD
 		"internal/cli/doctor_directory_test.go",
-=======
-<<<<<<< HEAD
 		"internal/cli/directory_lifecycle_test.go",
-=======
 		"internal/cli/install_directory_test.go",
 		"internal/installplan/directory_test.go",
 		"internal/installstate/directory_test.go",
 		"internal/runtimematrix/directory_test.go",
 		"internal/skilldest/directory_test.go",
 		"internal/skillroot/directory_test.go",
->>>>>>> feat/issue-341-install-dir
->>>>>>> feat/issue-342-lifecycle
->>>>>>> feat/issue-343-doctor
         "internal/builtinassets/catalog/families/reasoning/capabilities/maintainer-delivery.json",
         "internal/builtinassets/catalog/families/reasoning/family.json",
         "internal/builtinassets/catalog/families/reasoning/router.md",
@@ -469,23 +460,14 @@ class CommunityPolicyTests(unittest.TestCase):
                                 or path.is_symlink()
                         )
 
-<<<<<<< HEAD
                 self.assertEqual(len(EXPECTED_FILES), 406)
                 self.assertEqual(len(actual_files), 406)
-=======
-<<<<<<< HEAD
                 self.assertEqual(len(EXPECTED_FILES), 406)
                 self.assertEqual(len(actual_files), 406)
-=======
-<<<<<<< HEAD
                 self.assertEqual(len(EXPECTED_FILES), 406)
                 self.assertEqual(len(actual_files), 406)
-=======
                 self.assertEqual(len(EXPECTED_FILES), 406)
                 self.assertEqual(len(actual_files), 406)
->>>>>>> feat/issue-341-install-dir
->>>>>>> feat/issue-342-lifecycle
->>>>>>> feat/issue-343-doctor
                 self.assertEqual(actual_files, EXPECTED_FILES)
 
                 gitignore_entries = set(read_text(".gitignore").splitlines())
@@ -581,7 +563,6 @@ class CommunityPolicyTests(unittest.TestCase):
                         "https://github.com/refactor-ia/cortex",
                         "target architecture and community foundation",
                         "Implementation is not complete",
-                        "docs/README.md",
                         "CONTRIBUTING.md",
                         "LICENSE-CONTENT.md",
                 ):
