@@ -462,6 +462,8 @@ class CommunityPolicyTests(unittest.TestCase):
                 self.assertEqual(len(actual_files), 404)
                 self.assertEqual(len(EXPECTED_FILES), 404)
                 self.assertEqual(len(actual_files), 404)
+                self.assertEqual(len(EXPECTED_FILES), 404)
+                self.assertEqual(len(actual_files), 404)
                 self.assertEqual(actual_files, EXPECTED_FILES)
 
                 gitignore_entries = set(read_text(".gitignore").splitlines())

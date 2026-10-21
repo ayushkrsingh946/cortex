@@ -280,8 +280,15 @@ func runQA(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		if err != nil && strings.Contains(err.Error(), "stream_retained=") {
 			_, _ = fmt.Fprintf(stderr, "%s\n", err.Error())
 		}
+		if unavailable := (*qapi.BackendUnavailableError)(nil); errors.As(err, &unavailable) {
+			_, _ = fmt.Fprintf(stderr, "route_provider=%s route_model=%s\n", unavailable.Provider, unavailable.Model)
+		}
 		if code == qaadmission.CodeModelUnavailable {
+			_, _ = io.WriteString(stderr, qaModelUnavailableNote())
 			_, _ = io.WriteString(stderr, qaRouteSetupNote(catalogRoot))
+		}
+		if code == qaadmission.CodeAuthNotReady {
+			_, _ = io.WriteString(stderr, qaAuthNotReadyNote())
 		}
 		if code == "route_incomplete" {
 			_, _ = fmt.Fprintf(stderr, "route_missing_backend=%s remedy=cortex qa setup --catalog %s --backend %s --provider <p> --model <m>\n", backend, catalogRoot, backend)
@@ -290,6 +297,9 @@ func runQA(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 			var diagnostic *qapi.ReportNormalizationError
 			if errors.As(err, &diagnostic) {
 				_, _ = fmt.Fprintf(stderr, "normalization_stage=%s normalization_reason=%s\n", diagnostic.Stage, diagnostic.Reason)
+				if diagnostic.Detail != "" {
+					_, _ = fmt.Fprintf(stderr, "normalization_detail=%s\n", diagnostic.Detail)
+				}
 			}
 		}
 		return failure
@@ -305,6 +315,21 @@ func qaFailure(stderr io.Writer, code string) int {
 	writeError(stderr, code)
 	_, _ = io.WriteString(stderr, qaReportNote)
 	return exitFailure
+}
+
+// qaModelUnavailableNote names the problem behind a refused routed pair and
+// its actual remedy (issue #339): qa runs probe pi with --no-extensions, so a
+// provider registered only by a Pi extension is invisible to qa forever, and
+// the fix is a core models.json entry — not another route profile edit.
+func qaModelUnavailableNote() string {
+	return "remedy=the routed provider/model was not found in the core pi model table; a provider registered only by a pi extension is invisible to qa (qa probes with --no-extensions); add a core models.json entry (baseUrl, api, apiKey) for it or route to a provider pi lists; pi --no-extensions --list-models shows what qa can see\n"
+}
+
+// qaAuthNotReadyNote names the actual remedy for an authenticated provider
+// that is not ready (issue #339): complete the login in an interactive pi
+// session, then rerun. The no-refresh auth check is the probe that answered.
+func qaAuthNotReadyNote() string {
+	return "remedy=the routed provider exists but its credentials are not ready; enter pi and complete the login for the provider, then rerun cortex qa run\n"
 }
 
 // qaRouteSetupNote names the user-owned profile file and its shape, so an
