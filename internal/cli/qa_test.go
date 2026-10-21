@@ -331,6 +331,13 @@ func TestQASetupRefusesModelsTheRuntimeDoesNotHave(t *testing.T) {
 	if !strings.Contains(stderr.String(), "gpt-5.6-terra") {
 		t.Fatalf("stderr = %q, want the available models listed", stderr.String())
 	}
+	// Issue #339: a refused pair names why a working provider can still be
+	// invisible to qa and how to fix it.
+	for _, want := range []string{"--no-extensions", "models.json"} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Fatalf("stderr %q does not name %q", stderr.String(), want)
+		}
+	}
 	if _, err := os.Stat(filepath.Join(catalog, "cortex", "qa-profiles.json")); !os.IsNotExist(err) {
 		t.Fatal("a refused setup must not write a profile file")
 	}
@@ -468,6 +475,41 @@ func TestQARunInvalidCatalogManifest(t *testing.T) {
 		!strings.Contains(stderr.String(), "next_check=cortex qa --help") || strings.Contains(stderr.String(), root) ||
 		strings.Contains(stderr.String(), "cortex doctor") {
 		t.Fatalf("invalid catalog = %d stdout %q stderr %q", code, stdout.String(), stderr.String())
+	}
+}
+
+// Issue #339: an unavailable routed model must announce the problem and the
+// remedy: a provider registered only by a Pi extension is invisible to qa
+// (--no-extensions), and the fix is a core models.json entry. The line names
+// the routed pair so the operator can compare it with the core table.
+func TestQARunModelUnavailableAnnouncesExtensionInvisibility(t *testing.T) {
+	args := reportFixture(t)
+	mustOK(os.WriteFile("qa-report-scenario", []byte("model-unavailable"), 0o600))
+	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
+	if code := Run(context.Background(), args, stdout, stderr, nil); code != exitFailure {
+		t.Fatalf("model unavailable = %d", code)
+	}
+	for _, want := range []string{"route_provider=nan", "route_model=", "--no-extensions", "models.json"} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Fatalf("stderr %q does not name %q", stderr.String(), want)
+		}
+	}
+}
+
+// Issue #339: auth_not_ready must name the actual remedy — complete the
+// provider login in an interactive pi session, then rerun — instead of a
+// generic prerequisites note.
+func TestQARunAuthNotReadyNamesTheLoginRemedy(t *testing.T) {
+	args := reportFixture(t)
+	mustOK(os.WriteFile("qa-report-scenario", []byte("auth-not-ready"), 0o600))
+	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
+	if code := Run(context.Background(), args, stdout, stderr, nil); code != exitFailure {
+		t.Fatalf("auth not ready = %d", code)
+	}
+	for _, want := range []string{"route_provider=nan", "login"} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Fatalf("stderr %q does not name %q", stderr.String(), want)
+		}
 	}
 }
 

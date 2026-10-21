@@ -9,6 +9,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -167,7 +169,7 @@ func runLocalReport(ctx context.Context, request ReportRequest, backend Backend)
 	verdict := backend.ProbeAvailability(preflight, bound, route)
 	spent := endPreflight()
 	if !verdict.Available {
-		return "", verdict.Code, fmt.Errorf("report backend is unavailable")
+		return "", verdict.Code, &BackendUnavailableError{Code: verdict.Code, Provider: verdict.Provider, Model: verdict.Model}
 	}
 	run, cancelRun := runBudget(ctx, spent)
 	defer cancelRun()
@@ -209,7 +211,7 @@ func runLocalReport(ctx context.Context, request ReportRequest, backend Backend)
 		return "", code, diagnostic
 	}
 	if strings.TrimSpace(report) == "" {
-		return "", qaadmission.CodeNormalizationFailed, &ReportNormalizationError{reportStageReport, reportReasonBlank}
+		return "", qaadmission.CodeNormalizationFailed, &ReportNormalizationError{Stage: reportStageReport, Reason: reportReasonBlank}
 	}
 	return report, "", nil
 }
@@ -301,9 +303,17 @@ func reportFailureCode(diagnostic *ReportNormalizationError) qaadmission.Code {
 type ReportNormalizationError struct {
 	Stage  string
 	Reason string
+	// Detail names the observed shape at rejection - event index, event kind,
+	// role, field names - never stream content (issue #339). Every token is
+	// sanitized to a closed character set and bounded, so a hostile stream
+	// cannot carry its payload out through the diagnostic.
+	Detail string
 }
 
 func (e *ReportNormalizationError) Error() string {
+	if e.Detail != "" {
+		return "report normalization rejected: " + e.Stage + " " + e.Reason + " observed " + e.Detail
+	}
 	return "report normalization rejected: " + e.Stage + " " + e.Reason
 }
 
@@ -510,25 +520,36 @@ func encodeReportInput(route qaroute.ResolvedRoute, backendID, actorSHA256, skil
 // rejection it reports which fixed parser condition failed.
 func parseReportStream(data []byte) (string, bool, *ReportNormalizationError) {
 	if len(data) == 0 {
-		return "", false, &ReportNormalizationError{reportStageStream, reportReasonEmpty}
+		return "", false, &ReportNormalizationError{Stage: reportStageStream, Reason: reportReasonEmpty}
 	}
 	if data[len(data)-1] != '\n' {
-		return "", false, &ReportNormalizationError{reportStageStream, reportReasonUnterminated}
+		return "", false, &ReportNormalizationError{Stage: reportStageStream, Reason: reportReasonUnterminated}
 	}
 	if !utf8.Valid(data) {
-		return "", false, &ReportNormalizationError{reportStageStream, reportReasonInvalidUTF8}
+		return "", false, &ReportNormalizationError{Stage: reportStageStream, Reason: reportReasonInvalidUTF8}
+	}
+	eventIndex := 0
+	// reject attaches the observed shape of the failing event to every
+	// envelope- and message-stage rejection, so a retained stream comes
+	// pre-characterized (issue #339). kind and event are the current loop
+	// values; reject is only called from inside their iteration.
+	var kind string
+	var ok bool
+	var event map[string]json.RawMessage
+	reject := func(stage, reason string) (string, bool, *ReportNormalizationError) {
+		return "", false, &ReportNormalizationError{Stage: stage, Reason: reason, Detail: observedShape(eventIndex, kind, event)}
 	}
 	state, session, report := 0, false, ""
 	systemSeen, systemStart := false, json.RawMessage(nil)
 	echoSeen, echoStart, terminal := false, json.RawMessage(nil), json.RawMessage(nil)
 	for _, line := range bytes.Split(data[:len(data)-1], []byte("\n")) {
-		event, ok := responseObject(line)
+		event, ok = responseObject(line)
 		if !ok {
-			return "", false, &ReportNormalizationError{reportStageStream, reportReasonMalformedRecord}
+			return "", false, &ReportNormalizationError{Stage: reportStageStream, Reason: reportReasonMalformedRecord}
 		}
-		kind, ok := stringField(event, "type")
+		kind, ok = stringField(event, "type")
 		if !ok {
-			return "", false, &ReportNormalizationError{reportStageEnvelope, reportReasonMissingType}
+			return "", false, &ReportNormalizationError{Stage: reportStageEnvelope, Reason: reportReasonMissingType, Detail: observedShape(eventIndex, "", event)}
 		}
 		switch state {
 		case 0:
@@ -537,16 +558,16 @@ func parseReportStream(data []byte) (string, bool, *ReportNormalizationError) {
 			} else if kind == "agent_start" && exactFields(event, "type") {
 				state = 1
 			} else {
-				return "", false, &ReportNormalizationError{reportStageEnvelope, reportReasonUnexpected}
+				return reject(reportStageEnvelope, reportReasonUnexpected)
 			}
 		case 1:
 			if kind != "turn_start" || !exactFields(event, "type") {
-				return "", false, &ReportNormalizationError{reportStageEnvelope, reportReasonUnexpected}
+				return reject(reportStageEnvelope, reportReasonUnexpected)
 			}
 			state = 2
 		case 2:
 			if kind != "message_start" || !exactFields(event, "type", "message") {
-				return "", false, &ReportNormalizationError{reportStageEnvelope, reportReasonUnexpected}
+				return reject(reportStageEnvelope, reportReasonUnexpected)
 			}
 			// A fresh Pi prompt may begin with one system-message pair before
 			// the input echo. Keep it closed to the source-derived shape and
@@ -563,42 +584,51 @@ func parseReportStream(data []byte) (string, bool, *ReportNormalizationError) {
 				echoStart = event["message"]
 				state = 9
 			} else if !validAssistant(event["message"], false) {
-				return "", false, &ReportNormalizationError{reportStageMessage, reportReasonInvalidMessage}
+				return reject(reportStageMessage, reportReasonInvalidMessage)
 			} else {
 				state = 3
 			}
 		case 8:
 			if kind != "message_end" || !exactFields(event, "type", "message") {
-				return "", false, &ReportNormalizationError{reportStageEnvelope, reportReasonUnexpected}
+				return reject(reportStageEnvelope, reportReasonUnexpected)
 			}
 			if !bytes.Equal(systemStart, event["message"]) {
-				return "", false, &ReportNormalizationError{reportStageMessage, reportReasonInvalidMessage}
+				return reject(reportStageMessage, reportReasonInvalidMessage)
 			}
 			state = 2
 		case 9:
 			if kind != "message_end" || !exactFields(event, "type", "message") {
-				return "", false, &ReportNormalizationError{reportStageEnvelope, reportReasonUnexpected}
+				return reject(reportStageEnvelope, reportReasonUnexpected)
 			}
 			if !bytes.Equal(echoStart, event["message"]) {
-				return "", false, &ReportNormalizationError{reportStageMessage, reportReasonInvalidMessage}
+				return reject(reportStageMessage, reportReasonInvalidMessage)
 			}
 			state = 2
 		case 3:
 			if kind == "message_update" {
 				if !validUpdate(event) {
-					return "", false, &ReportNormalizationError{reportStageMessage, reportReasonInvalidMessage}
+					return reject(reportStageMessage, reportReasonInvalidMessage)
 				}
 				continue
 			}
 			if kind != "message_end" || !exactFields(event, "type", "message") {
-				return "", false, &ReportNormalizationError{reportStageEnvelope, reportReasonUnexpected}
+				return reject(reportStageEnvelope, reportReasonUnexpected)
 			}
 			text, ok, diagnostic := reportText(event)
 			if !ok {
 				if failure := piTerminalFailure(event); failure != nil {
 					return "", false, failure
 				}
+				diagnostic.Detail = observedShape(eventIndex, kind, event)
 				return "", false, diagnostic
+			}
+			// A terminal error stopReason is the runtime saying it could not
+			// answer, even when the message carries report-shaped text: pi
+			// has been observed reporting a failed run as success with the
+			// error text as the result, and that text is never the report
+			// (#326, issue #339).
+			if failure := piTerminalFailure(event); failure != nil {
+				return "", false, failure
 			}
 			report = text
 			terminal = event["message"]
@@ -606,22 +636,23 @@ func parseReportStream(data []byte) (string, bool, *ReportNormalizationError) {
 		case 4:
 			turn, valid, diagnostic := reportText(event)
 			if kind != "turn_end" || !exactFields(event, "type", "message", "toolResults") {
-				return "", false, &ReportNormalizationError{reportStageEnvelope, reportReasonUnexpected}
+				return reject(reportStageEnvelope, reportReasonUnexpected)
 			}
 			if !valid {
+				diagnostic.Detail = observedShape(eventIndex, kind, event)
 				return "", false, diagnostic
 			}
 			if turn != report {
-				return "", false, &ReportNormalizationError{reportStageMessage, reportReasonTurnMismatch}
+				return reject(reportStageMessage, reportReasonTurnMismatch)
 			}
 			var tools []json.RawMessage
 			if json.Unmarshal(event["toolResults"], &tools) != nil || len(tools) != 0 {
-				return "", false, &ReportNormalizationError{reportStageMessage, reportReasonToolResults}
+				return reject(reportStageMessage, reportReasonToolResults)
 			}
 			state = 5
 		case 5:
 			if kind != "agent_end" || !exactFields(event, "type", "messages", "willRetry") {
-				return "", false, &ReportNormalizationError{reportStageEnvelope, reportReasonUnexpected}
+				return reject(reportStageEnvelope, reportReasonUnexpected)
 			}
 			// runAgentLoop reports newMessages: the initial system message and
 			// input prompts it echoed followed by the terminal assistant message,
@@ -637,30 +668,98 @@ func parseReportStream(data []byte) (string, bool, *ReportNormalizationError) {
 				expected = append([]json.RawMessage{systemStart}, expected...)
 			}
 			if json.Unmarshal(event["messages"], &messages) != nil || len(messages) != len(expected) {
-				return "", false, &ReportNormalizationError{reportStageMessage, reportReasonExtraMessages}
+				return reject(reportStageMessage, reportReasonExtraMessages)
 			}
 			for index := range expected {
 				if !bytes.Equal(messages[index], expected[index]) {
-					return "", false, &ReportNormalizationError{reportStageMessage, reportReasonExtraMessages}
+					return reject(reportStageMessage, reportReasonExtraMessages)
 				}
 			}
 			if !falseField(event, "willRetry") {
-				return "", false, &ReportNormalizationError{reportStageMessage, reportReasonRetryFlag}
+				return reject(reportStageMessage, reportReasonRetryFlag)
 			}
 			state = 6
 		case 6:
-			if kind != "agent_settled" || !exactFields(event, "type") {
-				return "", false, &ReportNormalizationError{reportStageEnvelope, reportReasonUnexpected}
+			// pi 1.3.0 adds an aborted flag to agent_settled; an aborted run
+			// is never a report, so false stays required and true fails closed.
+			if kind != "agent_settled" || !exactFields(event, "type") && !(exactFields(event, "type", "aborted") && falseField(event, "aborted")) {
+				return reject(reportStageEnvelope, reportReasonUnexpected)
 			}
 			state = 7
 		default:
-			return "", false, &ReportNormalizationError{reportStageEnvelope, reportReasonUnexpected}
+			return reject(reportStageEnvelope, reportReasonUnexpected)
 		}
+		eventIndex++
 	}
 	if state == 6 || state == 7 {
 		return report, true, nil
 	}
-	return "", false, &ReportNormalizationError{reportStageStream, reportReasonIncomplete}
+	return "", false, &ReportNormalizationError{Stage: reportStageStream, Reason: reportReasonIncomplete}
+}
+
+// observedShape renders one bounded, sanitized shape descriptor for the
+// failing event: index, kind, role, and field names. It never carries stream
+// values — field names only — and every token is held to a closed character
+// set, so a hostile stream cannot smuggle content out through the diagnostic
+// (issue #339).
+func observedShape(eventIndex int, kind string, event map[string]json.RawMessage) string {
+	shape := &strings.Builder{}
+	shape.WriteString("event=")
+	shape.WriteString(strconv.Itoa(eventIndex))
+	shape.WriteString(" type=")
+	shape.WriteString(observedToken(kind))
+	fields := make([]string, 0, len(event))
+	for field := range event {
+		fields = append(fields, observedToken(field))
+	}
+	sort.Strings(fields)
+	role := ""
+	var message map[string]json.RawMessage
+	if json.Unmarshal(event["message"], &message) == nil && message != nil {
+		role = observedToken(stringFieldValue(message["role"]))
+		if inner := make([]string, 0, len(message)); len(inner) == 0 {
+			for field := range message {
+				inner = append(inner, observedToken(field))
+			}
+			sort.Strings(inner)
+			fields = append(fields, "message{"+strings.Join(inner, ",")+"}")
+		}
+	}
+	if role != "" {
+		shape.WriteString(" role=")
+		shape.WriteString(role)
+	}
+	shape.WriteString(" fields=")
+	shape.WriteString(strings.Join(fields, ","))
+	return shape.String()
+}
+
+// observedToken bounds one diagnostic token to printable closed-vocabulary
+// characters; anything outside is replaced, never passed through.
+func observedToken(value string) string {
+	if value == "" || len(value) > 64 {
+		return "<redacted>"
+	}
+	for _, character := range value {
+		if character < 'a' || character > 'z' {
+			if character < 'A' || character > 'Z' {
+				if character < '0' || character > '9' {
+					if character != '_' && character != '-' && character != '.' {
+						return "<redacted>"
+					}
+				}
+			}
+		}
+	}
+	return value
+}
+
+func stringFieldValue(raw json.RawMessage) string {
+	var value string
+	if json.Unmarshal(raw, &value) != nil {
+		return ""
+	}
+	return value
 }
 
 // piTerminalFailure names a backend-reported terminal failure in the pi
@@ -682,21 +781,21 @@ func piTerminalFailure(event map[string]json.RawMessage) *ReportNormalizationErr
 	}
 	for _, entry := range message.Diagnostics {
 		if entry.Type == "provider_transport_failure" {
-			return &ReportNormalizationError{reportStageMessage, reportReasonBackendUnavailable}
+			return &ReportNormalizationError{Stage: reportStageMessage, Reason: reportReasonBackendUnavailable}
 		}
 	}
-	return &ReportNormalizationError{reportStageMessage, reportReasonBackendFailed}
+	return &ReportNormalizationError{Stage: reportStageMessage, Reason: reportReasonBackendFailed}
 }
 
 func reportText(event map[string]json.RawMessage) (string, bool, *ReportNormalizationError) {
 	var message map[string]json.RawMessage
-	if json.Unmarshal(event["message"], &message) != nil || !allowedFields(message, "role", "content", "api", "provider", "model", "responseModel", "responseId", "providerThinkingLevel", "diagnostics", "usage", "stopReason", "deferred", "errorMessage", "rawStopReason", "endTurn", "timestamp") {
-		return "", false, &ReportNormalizationError{reportStageMessage, reportReasonInvalidMessage}
+	if json.Unmarshal(event["message"], &message) != nil || !allowedFields(message, "role", "content", "api", "provider", "model", "responseModel", "responseId", "providerThinkingLevel", "diagnostics", "usage", "stopReason", "deferred", "errorMessage", "rawStopReason", "endTurn", "timestamp", "durationMs", "thinkingLevel") {
+		return "", false, &ReportNormalizationError{Stage: reportStageMessage, Reason: reportReasonInvalidMessage}
 	}
 	role, ok := stringField(message, "role")
 	var content []json.RawMessage
 	if !ok || role != "assistant" || json.Unmarshal(message["content"], &content) != nil {
-		return "", false, &ReportNormalizationError{reportStageMessage, reportReasonInvalidMessage}
+		return "", false, &ReportNormalizationError{Stage: reportStageMessage, Reason: reportReasonInvalidMessage}
 	}
 	// Reasoning models emit one leading thinking block before the report text
 	// when the route enables thinking; the thinking block is validated and
@@ -705,14 +804,14 @@ func reportText(event map[string]json.RawMessage) (string, bool, *ReportNormaliz
 		content = content[1:]
 	}
 	if len(content) != 1 {
-		return "", false, &ReportNormalizationError{reportStageMessage, reportReasonInvalidMessage}
+		return "", false, &ReportNormalizationError{Stage: reportStageMessage, Reason: reportReasonInvalidMessage}
 	}
 	if toolContent(content[0]) {
-		return "", false, &ReportNormalizationError{reportStageMessage, reportReasonToolCall}
+		return "", false, &ReportNormalizationError{Stage: reportStageMessage, Reason: reportReasonToolCall}
 	}
 	text, ok := textContent(content[0])
 	if !ok {
-		return "", false, &ReportNormalizationError{reportStageMessage, reportReasonInvalidText}
+		return "", false, &ReportNormalizationError{Stage: reportStageMessage, Reason: reportReasonInvalidText}
 	}
 	return text, true, nil
 }

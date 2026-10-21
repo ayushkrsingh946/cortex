@@ -279,7 +279,7 @@ func validUpdate(event map[string]json.RawMessage) bool {
 
 func terminalMessage(raw json.RawMessage) (responseOutcomeTerminal, bool) {
 	var message map[string]json.RawMessage
-	if json.Unmarshal(raw, &message) != nil || !allowedFields(message, "role", "content", "api", "provider", "model", "responseModel", "responseId", "providerThinkingLevel", "diagnostics", "usage", "stopReason", "deferred", "errorMessage", "rawStopReason", "endTurn", "timestamp") {
+	if json.Unmarshal(raw, &message) != nil || !allowedFields(message, "role", "content", "api", "provider", "model", "responseModel", "responseId", "providerThinkingLevel", "diagnostics", "usage", "stopReason", "deferred", "errorMessage", "rawStopReason", "endTurn", "timestamp", "durationMs", "thinkingLevel") {
 		return responseOutcomeTerminal{}, false
 	}
 	role, ok := stringField(message, "role")
@@ -333,7 +333,7 @@ func parseResult(data []byte) (responseResult, bool) {
 
 func validAssistant(raw json.RawMessage, terminal bool) bool {
 	var message map[string]json.RawMessage
-	if json.Unmarshal(raw, &message) != nil || !allowedFields(message, "role", "content", "api", "provider", "model", "responseModel", "responseId", "providerThinkingLevel", "diagnostics", "usage", "stopReason", "deferred", "errorMessage", "rawStopReason", "endTurn", "timestamp") {
+	if json.Unmarshal(raw, &message) != nil || !allowedFields(message, "role", "content", "api", "provider", "model", "responseModel", "responseId", "providerThinkingLevel", "diagnostics", "usage", "stopReason", "deferred", "errorMessage", "rawStopReason", "endTurn", "timestamp", "durationMs", "thinkingLevel") {
 		return false
 	}
 	role, ok := stringField(message, "role")

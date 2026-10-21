@@ -241,24 +241,24 @@ const opencodeStopReason = "stop"
 // and mapping it onto an admission code is the receipt-contract slice's work.
 func parseOpenCodeReportStream(data []byte) (string, *ReportNormalizationError) {
 	if len(data) == 0 {
-		return "", &ReportNormalizationError{reportStageStream, reportReasonEmpty}
+		return "", &ReportNormalizationError{Stage: reportStageStream, Reason: reportReasonEmpty}
 	}
 	if data[len(data)-1] != '\n' {
-		return "", &ReportNormalizationError{reportStageStream, reportReasonUnterminated}
+		return "", &ReportNormalizationError{Stage: reportStageStream, Reason: reportReasonUnterminated}
 	}
 	if !utf8.Valid(data) {
-		return "", &ReportNormalizationError{reportStageStream, reportReasonInvalidUTF8}
+		return "", &ReportNormalizationError{Stage: reportStageStream, Reason: reportReasonInvalidUTF8}
 	}
 	report := ""
 	started, textSeen, finished := false, false, false
 	for index, line := range splitStreamLines(data) {
 		event, ok := responseObject(line)
 		if !ok {
-			return "", &ReportNormalizationError{reportStageStream, reportReasonMalformedRecord}
+			return "", &ReportNormalizationError{Stage: reportStageStream, Reason: reportReasonMalformedRecord}
 		}
 		kind, ok := stringField(event, "type")
 		if !ok {
-			return "", &ReportNormalizationError{reportStageEnvelope, reportReasonMissingType}
+			return "", &ReportNormalizationError{Stage: reportStageEnvelope, Reason: reportReasonMissingType}
 		}
 		switch {
 		case kind == "step_start":
@@ -266,7 +266,7 @@ func parseOpenCodeReportStream(data []byte) (string, *ReportNormalizationError) 
 			// the single-turn bound OpenCode offers no flag for is enforced
 			// here instead.
 			if index != 0 || started {
-				return "", &ReportNormalizationError{reportStageResult, reportReasonTurnMismatch}
+				return "", &ReportNormalizationError{Stage: reportStageResult, Reason: reportReasonTurnMismatch}
 			}
 			started = true
 		case !started:
@@ -275,19 +275,19 @@ func parseOpenCodeReportStream(data []byte) (string, *ReportNormalizationError) 
 			// exception is the error event below, which replaces the whole
 			// stream when the run never reached the model.
 			if kind == "error" {
-				return "", &ReportNormalizationError{reportStageResult, reportReasonBackendFailed}
+				return "", &ReportNormalizationError{Stage: reportStageResult, Reason: reportReasonBackendFailed}
 			}
-			return "", &ReportNormalizationError{reportStageEnvelope, reportReasonUnexpected}
+			return "", &ReportNormalizationError{Stage: reportStageEnvelope, Reason: reportReasonUnexpected}
 		case kind == "error":
-			return "", &ReportNormalizationError{reportStageResult, reportReasonBackendFailed}
+			return "", &ReportNormalizationError{Stage: reportStageResult, Reason: reportReasonBackendFailed}
 		case kind == "tool_use":
 			// Tool-freedom is enforced here rather than by a flag: OpenCode
 			// has none that disables its tools, so a turn that reached for one
 			// is rejected instead of being reported as evidence.
-			return "", &ReportNormalizationError{reportStageMessage, reportReasonToolCall}
+			return "", &ReportNormalizationError{Stage: reportStageMessage, Reason: reportReasonToolCall}
 		case kind == "text":
 			if finished || textSeen {
-				return "", &ReportNormalizationError{reportStageMessage, reportReasonExtraMessages}
+				return "", &ReportNormalizationError{Stage: reportStageMessage, Reason: reportReasonExtraMessages}
 			}
 			textSeen = true
 			text, diagnostic := openCodeText(event)
@@ -297,7 +297,7 @@ func parseOpenCodeReportStream(data []byte) (string, *ReportNormalizationError) 
 			report = text
 		case kind == "step_finish":
 			if finished {
-				return "", &ReportNormalizationError{reportStageResult, reportReasonTurnMismatch}
+				return "", &ReportNormalizationError{Stage: reportStageResult, Reason: reportReasonTurnMismatch}
 			}
 			finished = true
 			if diagnostic := openCodeStepFinish(event); diagnostic != nil {
@@ -306,10 +306,10 @@ func parseOpenCodeReportStream(data []byte) (string, *ReportNormalizationError) 
 		}
 	}
 	if !finished {
-		return "", &ReportNormalizationError{reportStageStream, reportReasonIncomplete}
+		return "", &ReportNormalizationError{Stage: reportStageStream, Reason: reportReasonIncomplete}
 	}
 	if !textSeen {
-		return "", &ReportNormalizationError{reportStageMessage, reportReasonIncomplete}
+		return "", &ReportNormalizationError{Stage: reportStageMessage, Reason: reportReasonIncomplete}
 	}
 	return report, nil
 }
@@ -323,7 +323,7 @@ func openCodeText(event map[string]json.RawMessage) (string, *ReportNormalizatio
 		return "", diagnostic
 	}
 	if !stringFieldPresent(part, "text") {
-		return "", &ReportNormalizationError{reportStageMessage, reportReasonInvalidText}
+		return "", &ReportNormalizationError{Stage: reportStageMessage, Reason: reportReasonInvalidText}
 	}
 	text, _ := stringField(part, "text")
 	return text, nil
@@ -340,7 +340,7 @@ func openCodeStepFinish(event map[string]json.RawMessage) *ReportNormalizationEr
 		return diagnostic
 	}
 	if reason, ok := stringField(part, "reason"); !ok || reason != opencodeStopReason {
-		return &ReportNormalizationError{reportStageResult, reportReasonTurnMismatch}
+		return &ReportNormalizationError{Stage: reportStageResult, Reason: reportReasonTurnMismatch}
 	}
 	return nil
 }
@@ -350,7 +350,7 @@ func openCodeStepFinish(event map[string]json.RawMessage) *ReportNormalizationEr
 func openCodePart(event map[string]json.RawMessage) (map[string]json.RawMessage, *ReportNormalizationError) {
 	var part map[string]json.RawMessage
 	if json.Unmarshal(event["part"], &part) != nil || part == nil {
-		return nil, &ReportNormalizationError{reportStageMessage, reportReasonInvalidMessage}
+		return nil, &ReportNormalizationError{Stage: reportStageMessage, Reason: reportReasonInvalidMessage}
 	}
 	return part, nil
 }

@@ -625,3 +625,110 @@ func TestParseReportStreamTerminalProviderFailure(t *testing.T) {
 		})
 	}
 }
+
+// livePiAssistantMessage renders the assistant message shape pi 1.3.0 emits
+// (observed capture, issue #339): the 0.85.1 field set plus durationMs and
+// thinkingLevel. All three events that serialize the terminal message reuse
+// the same bytes, exactly as pi emits them.
+func livePiAssistantMessage(text string) string {
+	encoded, err := json.Marshal(map[string]any{
+		"role":    "assistant",
+		"content": []any{map[string]any{"type": "text", "text": text}},
+		"api":     "nan-api", "provider": "nan", "model": "glm5.3",
+		"stopReason": "stop", "timestamp": 0,
+		"usage":        map[string]any{"totalTokens": 0},
+		"thinkingLevel": "high",
+		"durationMs":   1234,
+	})
+	if err != nil {
+		panic(err)
+	}
+	return string(encoded)
+}
+
+// livePiStream builds the full observed pi 1.3.0 fresh-prompt shape: session,
+// agent/turn start, the initial system pair, the user prompt echo pair, the
+// assistant terminal triple, agent_end, and agent_settled carrying aborted.
+func livePiStream(text string, aborted bool) []byte {
+	message := livePiAssistantMessage(text)
+	user := reportUserMessage(text)
+	abortedField := ""
+	if aborted {
+		abortedField = `,"aborted":true`
+	} else {
+		abortedField = `,"aborted":false`
+	}
+	lines := []string{
+		`{"type":"session","version":3,"id":"fixture","timestamp":"1970-01-01T00:00:00.000Z","cwd":"fixture"}`,
+		`{"type":"agent_start"}`,
+		`{"type":"turn_start"}`,
+		`{"type":"message_start","message":` + reportInitialSystemMessage + `}`,
+		`{"type":"message_end","message":` + reportInitialSystemMessage + `}`,
+		`{"type":"message_start","message":` + user + `}`,
+		`{"type":"message_end","message":` + user + `}`,
+		`{"type":"message_start","message":` + message + `}`,
+		`{"type":"message_end","message":` + message + `}`,
+		`{"type":"turn_end","message":` + message + `,"toolResults":[]}`,
+		`{"type":"agent_end","messages":[` + reportInitialSystemMessage + `,` + user + `,` + message + `],"willRetry":false}`,
+		`{"type":"agent_settled"` + abortedField + `}`,
+	}
+	var stream bytes.Buffer
+	for _, line := range lines {
+		stream.WriteString(line + "\n")
+	}
+	return stream.Bytes()
+}
+
+// Issue #339: a completed run whose verdict sits in the retained stream was
+// rejected as invalid_message because the parser pinned the pi 0.85.1 field
+// set and pi 1.3.0 adds durationMs, thinkingLevel, and agent_settled.aborted.
+func TestParseReportStreamLivePiShape(t *testing.T) {
+	const text = "Adversarial review fixture verdict"
+	t.Run("a completed pi 1.3.0 stream delivers its verdict", func(t *testing.T) {
+		report, ok, diagnostic := parseReportStream(livePiStream(text, false))
+		if !ok || diagnostic != nil || report != text {
+			t.Fatalf("parseReportStream() = %q, %t, %#v; want the verdict", report, ok, diagnostic)
+		}
+	})
+	t.Run("an aborted run is never a report", func(t *testing.T) {
+		report, ok, diagnostic := parseReportStream(livePiStream(text, true))
+		if ok || diagnostic == nil || diagnostic.Stage != reportStageEnvelope || diagnostic.Reason != reportReasonUnexpected {
+			t.Fatalf("parseReportStream() = %q, %t, %#v; want a rejected abort", report, ok, diagnostic)
+		}
+	})
+	t.Run("a terminal error stopReason is a backend failure even with report-shaped text", func(t *testing.T) {
+		// pi 1.3.0 reports one earlier failure as subtype success with the
+		// error text as the result; the parser must never deliver that as the
+		// report (issue #339).
+		stream := bytes.Replace(livePiStream(text, false), []byte(`"stopReason":"stop"`), []byte(`"stopReason":"error"`), -1)
+		report, ok, diagnostic := parseReportStream(stream)
+		if ok || diagnostic == nil || diagnostic.Stage != reportStageMessage || diagnostic.Reason != reportReasonBackendFailed {
+			t.Fatalf("parseReportStream() = %q, %t, %#v; want a typed backend failure", report, ok, diagnostic)
+		}
+	})
+}
+
+// Issue #339: a bare invalid_message tells the operator nothing. The parser
+// names the observed shape — event index, event kind, role, field names — and
+// carries no stream content, so the diagnostic characterizes the offending
+// stream without leaking it.
+func TestParseReportStreamDiagnosticNamesTheObservedShape(t *testing.T) {
+	const text = "Requirements analysis fixture report"
+	valid := reportStreamFixture(text, "")
+	stream := bytes.Replace(valid, []byte(reportAssistantStartLine), []byte(`{"type":"message_start","message":{"role":"assistant","content":[],"secret":"SENSITIVE-FIXTURE-MARKER"}}`), 1)
+	report, ok, diagnostic := parseReportStream(stream)
+	if ok || diagnostic == nil {
+		t.Fatalf("parseReportStream() = %q, %t, %#v; want rejection", report, ok, diagnostic)
+	}
+	if diagnostic.Detail == "" {
+		t.Fatalf("diagnostic carries no observed shape: %#v", diagnostic)
+	}
+	for _, want := range []string{"type=message_start", "role=assistant", "fields="} {
+		if !strings.Contains(diagnostic.Detail, want) {
+			t.Fatalf("detail %q does not name %q", diagnostic.Detail, want)
+		}
+	}
+	if strings.Contains(diagnostic.Detail, "SENSITIVE-FIXTURE-MARKER") || strings.Contains(diagnostic.Detail, "\n") {
+		t.Fatalf("detail leaks stream content or is not one line: %q", diagnostic.Detail)
+	}
+}
