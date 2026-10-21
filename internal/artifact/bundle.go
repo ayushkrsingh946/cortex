@@ -122,6 +122,16 @@ func validBundlePlan(plan projection.Plan) bool {
 	localTarget, local := plan.LocalUpdateTarget()
 	admitted := plan.UncertifiedAdmitted()
 	expected := []runtimematrix.RuntimeID{runtimematrix.RuntimePi, runtimematrix.RuntimeOpenCode, runtimematrix.RuntimeClaudeCode}
+	if len(results) == 1 && results[0].ID == runtimematrix.RuntimeDirectory {
+		// The directory projection mode (issue #341) binds exactly the single
+		// directory result; the probed three-runtime shape stays mandatory
+		// everywhere else.
+		if len(results) != 1 || !validBundleResult(results[0], localTarget, admitted) || local {
+			return false
+		}
+		actualTargets := plan.TransactionTargets()
+		return len(actualTargets) == 1 && actualTargets[0] == runtimematrix.RuntimeDirectory && plan.AllOrNothing() && !plan.ReportOnly()
+	}
 	if len(results) != len(expected) {
 		return false
 	}

@@ -34,6 +34,12 @@ type CandidateRequest struct {
 	// selects the cross-runtime install mode over every admitted runtime.
 	LocalTarget runtimematrix.RuntimeID
 
+	// DirectoryTarget selects the single-target directory projection mode
+	// (issue #341). It is mutually exclusive with LocalTarget and with any
+	// use of Observations, which the directory mode does not consume: the
+	// caller has already verified the target directory.
+	DirectoryTarget bool
+
 	// Admit gates the snapshot before any projection work. A nil Admit means
 	// this caller deliberately performs no admission check; it is never an
 	// oversight the reader has to detect by comparing call sites.
@@ -140,8 +146,14 @@ func BuildCandidates(request CandidateRequest) ([]Candidate, projection.Plan, er
 	return candidates, final, nil
 }
 
-// buildAdapterPlan selects the cross-runtime or single-runtime adapter mode.
+// buildAdapterPlan selects the cross-runtime, single-runtime, or directory mode.
 func buildAdapterPlan(request CandidateRequest) (adapterplan.Plan, error) {
+	if request.DirectoryTarget {
+		if request.LocalTarget != "" {
+			return adapterplan.Plan{}, ErrInvalid
+		}
+		return adapterplan.BuildDirectoryTarget(request.Snapshot.Fingerprint())
+	}
 	if request.LocalTarget == "" {
 		return adapterplan.Build(request.Snapshot.Fingerprint(), request.Observations)
 	}

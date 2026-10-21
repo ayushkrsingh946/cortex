@@ -25,6 +25,7 @@ type Plan struct {
 	ReportOnly          bool
 	localUpdateTarget   runtimematrix.RuntimeID
 	uncertifiedAdmitted []runtimematrix.RuntimeID
+	directoryTarget     bool
 }
 
 // LocalUpdateTarget returns the sole target produced by BuildLocalUpdate.
@@ -41,7 +42,13 @@ func (plan Plan) UncertifiedAdmitted() []runtimematrix.RuntimeID {
 }
 
 // Validate confirms that a plan retains the canonical adapter contract shape.
+// A directory-target plan is the one deliberate exception: it carries exactly
+// the single directory result BuildDirectoryTarget derived (issue #341), and
+// the three-runtime shape stays mandatory for every probed plan.
 func Validate(plan Plan) error {
+	if plan.directoryTarget {
+		return validateDirectoryTarget(plan)
+	}
 	if !validFingerprint(plan.SnapshotFingerprint) || plan.Results == nil || len(plan.Results) != 3 {
 		return errors.New("adapter plan: invalid plan")
 	}
@@ -91,6 +98,19 @@ func Validate(plan Plan) error {
 		return errors.New("adapter plan: invalid plan")
 	}
 	if len(targets) == 0 && (plan.AllOrNothing || !plan.ReportOnly) {
+		return errors.New("adapter plan: invalid plan")
+	}
+	return nil
+}
+
+func validateDirectoryTarget(plan Plan) error {
+	if !validFingerprint(plan.SnapshotFingerprint) || plan.localUpdateTarget != "" || len(plan.uncertifiedAdmitted) != 0 {
+		return errors.New("adapter plan: invalid plan")
+	}
+	if len(plan.Results) != 1 || plan.Results[0].ID != runtimematrix.RuntimeDirectory || !validResult(plan.Results[0], "", nil) {
+		return errors.New("adapter plan: invalid plan")
+	}
+	if len(plan.TransactionTargets) != 1 || plan.TransactionTargets[0] != runtimematrix.RuntimeDirectory || !plan.AllOrNothing || plan.ReportOnly {
 		return errors.New("adapter plan: invalid plan")
 	}
 	return nil
@@ -184,6 +204,25 @@ func build(snapshotFingerprint string, matrix runtimematrix.Matrix, localTarget 
 		ReportOnly:          len(targets) == 0,
 		localUpdateTarget:   localTarget,
 		uncertifiedAdmitted: admitted,
+	}, nil
+}
+
+// BuildDirectoryTarget derives the single-target adapter plan for the directory
+// projection mode (issue #341). No probe observation backs it: the caller has
+// already verified the target directory, and the plan records that verified
+// presence as an admitted single target so the shared pipeline reaches it
+// unchanged.
+func BuildDirectoryTarget(snapshotFingerprint string) (Plan, error) {
+	if !validFingerprint(snapshotFingerprint) {
+		return Plan{}, errors.New("adapter plan: invalid snapshot fingerprint")
+	}
+	result := RuntimeResult{ID: runtimematrix.RuntimeDirectory, Outcome: runtimematrix.OutcomePresentCompatible, Action: runtimematrix.Configure, IncludeInTransaction: true, TouchAllowed: true}
+	return Plan{
+		SnapshotFingerprint: snapshotFingerprint,
+		Results:             []RuntimeResult{result},
+		TransactionTargets:  []runtimematrix.RuntimeID{runtimematrix.RuntimeDirectory},
+		AllOrNothing:        true,
+		directoryTarget:     true,
 	}, nil
 }
 

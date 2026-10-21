@@ -71,15 +71,19 @@ func (target Target) SHA256() string       { return target.sha256 }
 func (target Target) Content() []byte      { return append([]byte{}, target.content...) }
 func (target Target) clone() Target        { target.content = target.Content(); return target }
 
-// Resolve binds a symbolic plan to caller-owned user roots without I/O.
-func Resolve(symbolic skilldest.Plan, inputs Inputs) (Plan, error) {
-	if !validPath(inputs.Home) || !validSymbolic(symbolic) {
+// ResolveIntoDirectory binds a symbolic plan to a caller-owned directory root
+// without I/O. The directory projection target (issue #341) passes an explicit
+// absolute path; destination validation matches Resolve exactly, so a root
+// reached through a symbolic plan's containment rules is enforced identically.
+func ResolveIntoDirectory(symbolic skilldest.Plan, root string) (Plan, error) {
+	if !validPath(root) || !validSymbolic(symbolic) {
 		return Plan{}, invalid()
 	}
-	root, ok := resolveRoot(symbolic.RuntimeID(), inputs)
-	if !ok || !validPath(root) {
-		return Plan{}, invalid()
-	}
+	return deriveTargets(symbolic, root)
+}
+
+// deriveTargets is the shared target derivation for both root resolution modes.
+func deriveTargets(symbolic skilldest.Plan, root string) (Plan, error) {
 	destinations := symbolic.Destinations()
 	targets := make([]Target, len(destinations))
 	for i, destination := range destinations {
@@ -92,6 +96,18 @@ func Resolve(symbolic skilldest.Plan, inputs Inputs) (Plan, error) {
 		targets[i] = Target{destination.LogicalID(), absolute, destination.SHA256(), destination.Content()}
 	}
 	return Plan{runtimeID: string(symbolic.RuntimeID()), rootKind: symbolic.RootKind(), snapshotFingerprint: symbolic.SnapshotFingerprint(), rootPath: root, targets: targets}, nil
+}
+
+// Resolve binds a symbolic plan to caller-owned user roots without I/O.
+func Resolve(symbolic skilldest.Plan, inputs Inputs) (Plan, error) {
+	if !validPath(inputs.Home) || !validSymbolic(symbolic) {
+		return Plan{}, invalid()
+	}
+	root, ok := resolveRoot(symbolic.RuntimeID(), inputs)
+	if !ok || !validPath(root) {
+		return Plan{}, invalid()
+	}
+	return deriveTargets(symbolic, root)
 }
 
 // ResolveSystem reads only the system home and documented Pi and Claude overrides.
@@ -195,6 +211,8 @@ func expectedRoot(runtime runtimematrix.RuntimeID) skilldest.RootKind {
 		return skilldest.RootKindOpenCodeUserConfig
 	case runtimematrix.RuntimeClaudeCode:
 		return skilldest.RootKindClaudeCodeUser
+	case runtimematrix.RuntimeDirectory:
+		return skilldest.RootKindDirectory
 	}
 	return ""
 }

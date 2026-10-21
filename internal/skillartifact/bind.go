@@ -97,7 +97,7 @@ func validAssessment(a projection.Assessment) bool {
 		return false
 	}
 	switch a.RuntimeID() {
-	case runtimematrix.RuntimePi, runtimematrix.RuntimeOpenCode, runtimematrix.RuntimeClaudeCode:
+	case runtimematrix.RuntimePi, runtimematrix.RuntimeOpenCode, runtimematrix.RuntimeClaudeCode, runtimematrix.RuntimeDirectory:
 	default:
 		return false
 	}
@@ -117,6 +117,15 @@ func validFinal(plan projection.Plan) bool {
 	localTarget, local := plan.LocalUpdateTarget()
 	admitted := plan.UncertifiedAdmitted()
 	ids := []runtimematrix.RuntimeID{runtimematrix.RuntimePi, runtimematrix.RuntimeOpenCode, runtimematrix.RuntimeClaudeCode}
+	if len(results) == 1 && results[0].ID == runtimematrix.RuntimeDirectory {
+		// The directory projection mode (issue #341) carries exactly the single
+		// directory result BuildDirectoryTarget derived; the probed three-runtime
+		// shape stays mandatory everywhere else.
+		if len(targets) != 1 || targets[0] != runtimematrix.RuntimeDirectory || !validResult(results[0], "", admitted) {
+			return false
+		}
+		return plan.AllOrNothing() && !plan.ReportOnly()
+	}
 	if len(results) != len(ids) {
 		return false
 	}
