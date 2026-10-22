@@ -107,11 +107,19 @@ func TestInstallDirectoryTargetFailClosedOnInvalidPaths(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(home, "regular-file"), []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// A relative path that does exist as a directory must also be refused
+	// before composition: it passes os.Stat/IsDir, so only the explicit
+	// absolute+clean check can catch it (issue #367).
+	if err := os.MkdirAll("test-invalid-target-exists", 0o700); err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll("test-invalid-target-exists")
 	failClosedCases := map[string]string{
-		"relative": "relative/target",
-		"missing":  missing,
-		"file":     filepath.Join(home, "regular-file"),
-		"empty":    "",
+		"relative":          "relative/target",
+		"relative-existing": "test-invalid-target-exists",
+		"missing":           missing,
+		"file":              filepath.Join(home, "regular-file"),
+		"empty":              "",
 	}
 	for name, target := range failClosedCases {
 		var stdout, stderr bytes.Buffer

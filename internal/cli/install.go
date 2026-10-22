@@ -101,6 +101,14 @@ func parseTargetDir(args []string) (string, bool, error) {
 // are a Cortex ownership artifact, and writing them inside the target would
 // make the projected tree depend on transaction internals.
 func runDirectoryInstall(stdout, stderr io.Writer, target string, deps installDependencies) int {
+	// Refuse malformed paths before any stat or composition work so every
+	// malformed target shares the one explicit invalid_target diagnostic
+	// (issue #367): a relative path that exists on disk would otherwise pass
+	// the stat check below and surface as install_composition_failed.
+	if !filepath.IsAbs(target) || target != filepath.Clean(target) {
+		writeError(stderr, "invalid_target")
+		return exitUsage
+	}
 	info, err := os.Stat(target)
 	if err != nil || !info.IsDir() {
 		writeError(stderr, "invalid_target")
